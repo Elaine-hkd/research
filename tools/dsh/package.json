@@ -1,0 +1,12 @@
+{
+  "name": "dsh-research-tools",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./skill_tool.js",
+  "files": ["skill_tool.js", "bundle.patch.yml"],
+  "dsh": {
+    "bundle": {
+      "patch": "./bundle.patch.yml"
+    }
+  }
+}

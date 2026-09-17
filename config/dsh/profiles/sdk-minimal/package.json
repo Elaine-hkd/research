@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-sdk-minimal",
+  "private": true,
+  "dependencies": {
+    "dsh-research-tools": "file:E:/lornd/research/tools/dsh"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-sdk-minimal",
+        "dsh-research-tools"
+      ],
+      "patchReload": "startup"
+    }
+  }
+}

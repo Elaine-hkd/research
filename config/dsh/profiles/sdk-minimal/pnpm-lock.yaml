@@ -1,0 +1,20 @@
+lockfileVersion: '6.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      dsh-research-tools:
+        specifier: file:E:/lornd/research/tools/dsh
+        version: file:../../../../tools/dsh
+
+packages:
+
+  file:../../../../tools/dsh:
+    resolution: {directory: ../../../../tools/dsh, type: directory}
+    name: dsh-research-tools
+    dev: false
