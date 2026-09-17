@@ -1,3 +1,6 @@
+.vscode/
+
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -8,3 +11,10 @@ wheels/
 
 # Virtual environments
 .venv
+.env
+
+node_modules/
+
+config/dsh/sessions/
+
+logs/
