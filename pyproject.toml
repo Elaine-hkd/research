@@ -7,4 +7,5 @@ requires-python = ">=3.12"
 dependencies = [
     "deepseek-harness-sdk>=0.1.5rc1",
     "loguru>=0.7.3",
+    "openhands-sdk>=1.49.1",
 ]
