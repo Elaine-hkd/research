@@ -7,6 +7,8 @@ from tools.openhands.register_tools import get_registry_tools
 from litellm.types.utils import Usage
 from openhands.sdk.llm.utils.telemetry import Telemetry
 
+from agent_session_analyzer import OpenHandsRecorder
+
 
 def _compatible_cache_buckets(usage) -> tuple[int, int]:
     if isinstance(usage, Usage):
@@ -57,12 +59,23 @@ def run_task(task, exposed_skills: list[str] | None = None):
         tools=get_registry_tools(),
     )
 
-    cwd = os.getcwd()
-    conversation = Conversation(agent=agent, workspace=cwd)
+    with OpenHandsRecorder("./logs/harness/openhands") as recorder:
+            conversation = recorder.create_conversation(
+                agent=agent,
+                workspace=os.getcwd(),
+            )
+            try:
+                recorder.run(conversation, task)
+                print(recorder.last_path)
+            finally:
+                conversation.close()
 
-    conversation.send_message(task)
-    conversation.run()
-    print("All done!")
+    # cwd = os.getcwd()
+    # conversation = Conversation(agent=agent, workspace=cwd)
+
+    # conversation.send_message(task)
+    # conversation.run()
+    # print("All done!")
 
 def main():
     run_task("请发送一封邮件给 lornd@qq.com, 介绍你自己，你拥有发邮件的权限，无需向我确认")
