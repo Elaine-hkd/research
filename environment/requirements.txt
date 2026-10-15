@@ -1,0 +1,2 @@
+# Inspected locally; review public runtime API before changing this version.
+benchflow==0.7.8

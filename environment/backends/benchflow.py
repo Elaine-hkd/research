@@ -1,0 +1,278 @@
+"""Async adapter for the inspected BenchFlow 0.7.8 public runtime API."""
+
+import asyncio
+import codecs
+from importlib.metadata import PackageNotFoundError, version
+import math
+from pathlib import Path, PurePosixPath
+import shlex
+import sys
+from typing import Sequence
+from uuid import uuid4
+
+from ..base import CommandResult, EnvironmentError
+
+
+def _seconds(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError("timeout must be a positive finite number")
+    return float(value)
+
+
+def _remote_path(value: str) -> str:
+    if not isinstance(value, str) or not PurePosixPath(value).is_absolute() or "\0" in value or "\\" in value:
+        raise ValueError("Remote paths must be absolute Linux paths")
+    return value
+
+
+async def _stream_compose_build(sandbox, command, *, check=True, timeout_sec=None):
+    from benchflow.sandbox._base import ExecResult
+    from benchflow.sandbox.docker import _sanitize_docker_compose_project_name
+
+    full_command = [
+        "docker", "compose", "--progress", "plain",
+        "--project-name", _sanitize_docker_compose_project_name(sandbox.session_id),
+        "--project-directory", str(sandbox.environment_dir.resolve()),
+    ]
+    for path in sandbox._docker_compose_paths:
+        full_command.extend(["-f", str(path.resolve())])
+    full_command.extend(command)
+
+    print(f"[Docker build] Building {sandbox.environment_name}", file=sys.stderr, flush=True)
+    process = await asyncio.create_subprocess_exec(
+        *full_command, env=sandbox._docker_compose_env(),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    output = bytearray()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    async def collect_output():
+        # Chunks avoid readline's length limit; decoding preserves split UTF-8 characters.
+        while chunk := await process.stdout.read(4096):
+            output.extend(chunk)
+            print(decoder.decode(chunk), end="", file=sys.stderr, flush=True)
+        print(decoder.decode(b"", final=True), end="", file=sys.stderr, flush=True)
+        await process.wait()
+
+    reader = asyncio.create_task(collect_output())
+    try:
+        # Keep draining the pipe while stopping the CLI after a timeout or Ctrl+C.
+        await asyncio.wait_for(asyncio.shield(reader), timeout_sec)
+    except BaseException as exc:
+        try:
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass  # The CLI exited between the returncode check and terminate.
+            try:
+                await asyncio.wait_for(asyncio.shield(reader), 5)
+            except TimeoutError:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                await asyncio.wait_for(asyncio.shield(reader), 5)
+        except BaseException as cleanup_exc:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            exc.add_note(f"Docker build process cleanup also failed: {cleanup_exc}")
+        if isinstance(exc, TimeoutError):
+            raise RuntimeError(
+                f"Docker compose build timed out after {timeout_sec} seconds. "
+                f"Output:\n{output.decode('utf-8', errors='replace')}"
+            ) from exc
+        raise
+
+    result = ExecResult(
+        return_code=process.returncode,
+        stdout=output.decode("utf-8", errors="replace"), stderr=None,
+    )
+    if check and result.return_code != 0:
+        raise RuntimeError(
+            f"Docker compose command failed for environment {sandbox.environment_name}. "
+            f"Command: {' '.join(full_command)}. Return code: {result.return_code}. "
+            f"Stdout: {result.stdout}. Stderr: {result.stderr}."
+        )
+    return result
+
+
+def _make_runtime(task_dir: Path, run_id: str):
+    # Lazy import: importing this package or running mock tests starts nothing.
+    try:
+        version("benchflow")
+    except PackageNotFoundError as exc:
+        raise EnvironmentError("Install benchflow==0.7.8 in this Python environment first") from exc
+    from benchflow import Environment as RuntimeEnvironment
+    runtime = RuntimeEnvironment.from_task(task_dir, sandbox="docker", rollout_name=run_id)
+    original_command = runtime.inner._run_docker_compose_command
+
+    async def run_compose(command, check=True, timeout_sec=None):
+        if command and command[0] == "build":
+            return await _stream_compose_build(
+                runtime.inner, command, check=check, timeout_sec=timeout_sec,
+            )
+        return await original_command(command, check=check, timeout_sec=timeout_sec)
+
+    # BenchFlow 0.7.8 has no build-output callback. Hook only this sandbox,
+    # preserving its build retries and the captured output of exec/down/up.
+    runtime.inner._run_docker_compose_command = run_compose
+    return runtime
+
+
+class BenchFlowBackend:
+    """Own a fresh BenchFlow Docker task sandbox; no agent or verifier is run.
+
+    One instance represents one lifecycle. All methods must run on the same
+    asyncio loop. stop() tears down containers just like destroy(); it does
+    NOT promise persistent suspension. Images and host logs are retained.
+    """
+
+    def __init__(self, task_dir: str | Path, *, force_build: bool = False,
+                 startup_timeout: float = 900, ready_timeout: float = 30,
+                 cleanup_timeout: float = 180):
+        self.task_dir = Path(task_dir).resolve()
+        if not self.task_dir.is_dir():
+            raise ValueError(f"Task directory does not exist: {self.task_dir}")
+        if not ((self.task_dir / "task.md").is_file() or (self.task_dir / "task.toml").is_file()):
+            raise ValueError("A native task.md or legacy task.toml task package is required")
+        self.run_id = "research-" + uuid4().hex
+        self.force_build = force_build
+        self.startup_timeout = _seconds(startup_timeout)
+        self.ready_timeout = _seconds(ready_timeout)
+        self.cleanup_timeout = _seconds(cleanup_timeout)
+        self.state = "new"
+        self._runtime = None
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        async with self._lock:
+            if self.state == "running":
+                return
+            if self.state != "new":
+                raise EnvironmentError(f"Cannot start environment in state {self.state}; create a new instance")
+            self.state = "starting"
+            try:
+                self._runtime = _make_runtime(self.task_dir, self.run_id)
+                await asyncio.wait_for(self._runtime.start(force_build=self.force_build), self.startup_timeout)
+                await self._probe(self.ready_timeout)
+                self.state = "running"
+            except BaseException as exc:
+                self.state = "failed"
+                try:
+                    await self._cleanup()
+                except BaseException as cleanup_exc:
+                    exc.add_note(f"Cleanup also failed; retry destroy(): {cleanup_exc}")
+                raise
+
+    async def _probe(self, timeout: float) -> None:
+        # Test the actual command channel, not just whether a container exists.
+        result = await asyncio.wait_for(
+            self._runtime.exec("true", timeout_sec=math.ceil(timeout), service="main"), timeout,
+        )
+        if result.return_code != 0:
+            raise EnvironmentError(f"Sandbox command channel is not ready: {result.stdout} {result.stderr}")
+
+    def _require_running(self):
+        if self.state != "running":
+            raise EnvironmentError(f"Environment is not running (state={self.state})")
+
+    async def wait_ready(self, timeout: float = 30) -> None:
+        timeout = _seconds(timeout)
+        async with self._lock:
+            self._require_running()
+            try:
+                await self._probe(timeout)
+            except BaseException:
+                self.state = "failed"
+                raise
+
+    async def execute(self, argv: Sequence[str], *, cwd: str | None = None,
+                      timeout: float = 60, service: str = "main") -> CommandResult:
+        if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence) or not argv:
+            raise ValueError("argv must be a non-empty sequence, not a shell string")
+        if any(not isinstance(arg, str) or "\0" in arg for arg in argv) or not argv[0]:
+            raise ValueError("argv must contain NUL-free strings and a non-empty executable")
+        if not isinstance(service, str) or not service or service.startswith("-") or "\0" in service:
+            raise ValueError("Invalid Compose service name")
+        timeout = _seconds(timeout)
+        if cwd is not None:
+            cwd = _remote_path(cwd)
+        async with self._lock:
+            self._require_running()
+            try:
+                result = await self._runtime.exec(
+                    shlex.join(argv), cwd=cwd, timeout_sec=math.ceil(timeout), service=service,
+                )
+            except BaseException:
+                # A broken/timed-out exec may leave the command running remotely.
+                # Disallow reuse until the caller has destroyed this environment.
+                self.state = "failed"
+                raise
+            return CommandResult(result.return_code, result.stdout or "", result.stderr or "")
+
+    async def upload(self, source: str | Path, destination: str) -> None:
+        source = Path(source).resolve(strict=True)
+        destination = _remote_path(destination)
+        async with self._lock:
+            self._require_running()
+            if source.is_dir():
+                # BenchFlow's Windows upload_dir path interpolates destination in
+                # a shell expression. Reject shell syntax on that code path.
+                if any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-." for c in destination):
+                    raise ValueError("Directory upload destination only supports letters, digits, /, _, -, .")
+                await self._runtime.upload_dir(source, destination)
+            elif source.is_file():
+                await self._runtime.upload_file(source, destination)
+            else:
+                raise ValueError("source must be a regular file or directory")
+
+    async def download(self, source: str, destination: str | Path, *, directory: bool = False) -> None:
+        source = _remote_path(source)
+        destination = Path(destination).resolve()
+        async with self._lock:
+            self._require_running()
+            if directory:
+                destination.mkdir(parents=True, exist_ok=True)
+                await self._runtime.download_dir(source, destination)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                await self._runtime.download_file(source, destination)
+
+    async def _cleanup(self):
+        if self._runtime is not None:
+            # The public inner handle bypasses Environment.stop's _started gate:
+            # start() may fail AFTER partial provisioning but BEFORE _started=True.
+            # delete=False avoids BenchFlow's `down --rmi all --volumes` path.
+            await asyncio.wait_for(self._runtime.inner.stop(delete=False), self.cleanup_timeout)
+            self._runtime = None
+
+    async def destroy(self) -> None:
+        async with self._lock:
+            if self.state == "destroyed":
+                return
+            try:
+                await self._cleanup()
+            except BaseException:
+                self.state = "failed"
+                raise
+            self.state = "destroyed"
+
+    async def stop(self) -> None:
+        """Tear down this sandbox; this backend has no suspend/resume contract."""
+        await self.destroy()
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            await self.destroy()
+        except BaseException as cleanup_exc:
+            if exc is None:
+                raise
+            exc.add_note(f"Environment cleanup failed; retry destroy(): {cleanup_exc}")
+        return False
