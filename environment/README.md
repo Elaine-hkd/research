@@ -121,6 +121,39 @@ env = DockerEnvironment(task, registry_url="http://127.0.0.1:5000")
 BenchFlow 0.7.8 直接读取 task.md，不再生成 instruction.md 或 task.toml。
 原索引 verifiler_dir 映射为 verifier/。这里不执行 agent、oracle 或评分，也不控制 with-skill/no-skill 条件。
 
+生成副本时还会扫描 `environment/`（含子目录）中的 `Dockerfile*`，在每个有 RUN 的构建阶段
+第一条 RUN 前注入清华 TUNA APT 换源命令；前置 USER 等指令保留原顺序。最后阶段没有 RUN 时
+在末尾注入，确保随后追加的桌面安装也能使用新源；没有 RUN 的中间阶段及 scratch 阶段不注入。
+Ubuntu/Debian 根据镜像内 `/etc/os-release` 识别，同时处理传统 `sources.list`、`.list` 和
+DEB822 `.sources` 文件中的官方软件源、安全更新源；保留发行版代号、组件、签名配置及第三方仓库。
+Ubuntu Ports 使用对应的 `ubuntu-ports` 镜像；使用 HTTP 避免最小镜像缺少 CA 证书导致首次换源失败，
+APT 签名校验保持启用。源地址按[清华 Ubuntu](https://mirrors.tuna.tsinghua.edu.cn/help/ubuntu/)与
+[Debian](https://mirrors.tuna.tsinghua.edu.cn/help/debian/)镜像说明配置。
+非 Ubuntu/Debian 系统打印跳过信息；Ubuntu/Debian 在首条 RUN 时必须已使用 root，否则明确报错。
+不修改 `data/` 原件或已有任务副本，不更改镜像基础版本，也不配置 pip、npm 或 Docker Hub 镜像。
+现有 `materialize_skillsbench_task(...)` 调用无需调整；只有重新生成的副本才包含此操作。
+
+只检查生成结果、不启动 Docker（项目已有 Python 环境与依赖即可；执行目录 `E:\lornd\research`）：
+
+```powershell
+@'
+from pathlib import Path
+from uuid import uuid4
+from environment import materialize_skillsbench_task
+task = materialize_skillsbench_task(
+    "data/task/skillsbench.json", "3d-scan-calc",
+    Path("workspace/environment") / uuid4().hex / "task",
+)
+print(task)
+print((task / "environment/Dockerfile").read_text(encoding="utf-8"))
+'@ | .\.venv\Scripts\python.exe -
+```
+
+预期 `# research: APT mirror (TUNA)` 及其 RUN 位于原始 `RUN apt-get update ...` 之前。
+构建时应看到 `research: APT mirror configured for ubuntu (TUNA)`，APT 下载日志使用
+`mirrors.tuna.tsinghua.edu.cn`。重点检查 Ubuntu 24.04、Python slim/Debian 以及添加桌面后的构建。
+本次仅检查代码与 diff，未执行上述命令、测试或 Docker 构建。
+
 ## 给任务副本添加完整桌面
 
 在任务生成后、创建 DockerEnvironment 前调用一次：

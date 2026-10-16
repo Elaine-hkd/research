@@ -2,7 +2,101 @@
 
 import json
 from pathlib import Path
+import re
 import shutil
+
+
+_APT_MIRROR_MARKER = "# research: APT mirror (TUNA)"
+_APT_MIRROR_COMMAND = r"""
+if [ ! -f /etc/os-release ]; then
+    echo 'research: APT mirror skipped (no /etc/os-release)'
+    exit 0
+fi
+. /etc/os-release
+case "$ID" in
+    ubuntu|debian) ;;
+    *) echo "research: APT mirror skipped ($ID)"; exit 0 ;;
+esac
+if [ "$(id -u)" -ne 0 ]; then
+    echo 'research: APT mirror requires root before the first RUN' >&2
+    exit 1
+fi
+# HTTP also works in minimal images without ca-certificates; APT signatures stay enabled.
+for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [ -f "$source" ] || continue
+    sed -E -i \
+        -e 's@https?://([[:alnum:]-]+\.)?(archive|security)\.ubuntu\.com/ubuntu(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/ubuntu\3@g' \
+        -e 's@https?://ports\.ubuntu\.com/ubuntu-ports(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports\1@g' \
+        -e 's@https?://(deb|security)\.debian\.org/debian-security(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/debian-security\2@g' \
+        -e 's@https?://security\.debian\.org/debian(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/debian-security\1@g' \
+        -e 's@https?://(deb\.debian\.org|ftp\.([[:alnum:]-]+\.)?debian\.org)/debian(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/debian\3@g' \
+        "$source"
+done
+echo "research: APT mirror configured for $ID (TUNA)"
+""".strip()
+
+
+def _inject_apt_mirror(dockerfile: Path) -> None:
+    """Prepare each build stage before its first RUN, after any initial USER."""
+    text = dockerfile.read_text(encoding="utf-8-sig")
+    if _APT_MIRROR_MARKER in text:
+        return
+    lines = text.splitlines(keepends=True)
+    block = f"\n{_APT_MIRROR_MARKER}\nRUN " + json.dumps(
+        ["/bin/sh", "-ec", _APT_MIRROR_COMMAND],
+    ) + "\n"
+    insertions = set()
+    pending_stage = False
+    escape = "\\"
+    i = 0
+    while i < len(lines):
+        start = i
+        line = lines[i]
+        i += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            directive = re.fullmatch(r"\s*#\s*escape\s*=\s*([\\`])\s*", line)
+            if directive:
+                escape = directive[1]
+            continue
+        # Consume a whole instruction so continuation lines are never instructions.
+        while line.rstrip("\r\n").endswith(escape) and i < len(lines):
+            line = lines[i]
+            i += 1
+            while line.lstrip().startswith("#") and i < len(lines):
+                line = lines[i]
+                i += 1
+        instruction = re.match(r"\s*([a-z]+)\s+(.*)", lines[start], re.IGNORECASE)
+        if instruction is None:
+            continue
+        keyword = instruction[1].upper()
+        if keyword == "FROM":
+            arguments = "".join(lines[start:i]).replace(escape + "\n", " ").split()[1:]
+            image = next(part for part in arguments if not part.startswith("--"))
+            pending_stage = image.lower() != "scratch"
+        elif keyword == "RUN" and pending_stage:
+            insertions.add(start)
+            pending_stage = False
+        # A heredoc may contain FROM/RUN as data, including embedded Python imports.
+        if keyword in {"RUN", "COPY"}:
+            command = "".join(lines[start:i])
+            for heredoc in re.finditer(r"<<(-?)[ \t]*(?:'([^']+)'|\"([^\"]+)\"|([a-zA-Z_][a-zA-Z0-9_]*))", command):
+                delimiter = next(value for value in heredoc.groups()[1:] if value is not None)
+                while i < len(lines):
+                    body = lines[i].rstrip("\r\n")
+                    i += 1
+                    if (body.lstrip("\t") if heredoc[1] else body) == delimiter:
+                        break
+                else:
+                    raise ValueError(f"Unclosed Dockerfile heredoc {delimiter!r}: {dockerfile}")
+    # A final stage without RUN can still receive the desktop installer afterwards.
+    if pending_stage:
+        insertions.add(len(lines))
+    if insertions:
+        rewritten = "".join((block if index in insertions else "") + line
+                            for index, line in enumerate(lines))
+        if len(lines) in insertions:
+            rewritten += block
+        dockerfile.write_text(rewritten, encoding="utf-8", newline="\n")
 
 
 def _native_task_text(source: Path) -> str:
@@ -36,6 +130,7 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     Caller owns the staging directory. No environment is started here.
     Absolute index paths are preserved; relative paths resolve beside the index.
     Only the staged task.md renames environment to sandbox for BenchFlow 0.7.8.
+    Staged Dockerfile* files switch official Ubuntu/Debian APT sources to TUNA.
     """
     index_path = Path(index_path).resolve(strict=True)
     rows = json.loads(index_path.read_text(encoding="utf-8-sig"))["tasks"]
@@ -79,4 +174,7 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
             shutil.copytree(source, target)
         else:
             shutil.copy2(source, target)
+    for dockerfile in sorted((destination / "environment").rglob("Dockerfile*")):
+        if dockerfile.is_file():
+            _inject_apt_mirror(dockerfile)
     return destination
