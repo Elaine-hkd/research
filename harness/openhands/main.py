@@ -1,13 +1,12 @@
+import asyncio
+import json
 import os
-
-from openhands.sdk import LLM, Agent, Conversation
-
-from tools.openhands.register_tools import get_registry_tools
 
 from litellm.types.utils import Usage
 from openhands.sdk.llm.utils.telemetry import Telemetry
 
 from agent_session_analyzer import OpenHandsRecorder
+from harness.openhands.runner import run_agent
 
 
 def _compatible_cache_buckets(usage) -> tuple[int, int]:
@@ -36,49 +35,33 @@ registry_address = "http://127.0.0.1:5000"
 
 
 def run_task(task, exposed_skills: list[str] | None = None):
-    # skills = search_skills(task)
-    os.environ["EXPOSED_SKILLS"] = str(exposed_skills or [])
+    os.environ["EXPOSED_SKILLS"] = json.dumps(exposed_skills or [], ensure_ascii=False)
+    os.environ.setdefault("SKILL_REGISTRY_URL", registry_address)
 
-    llm = LLM(
-        model="deepseek/deepseek-flash",
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com",
-    )
-
-    # agent_context = AgentContext(system_message_suffix=(
-    #     "<SKILLS>\n"
-    #     "The following skills are available. Some are auto-injected when their keywords or task types appear in your messages; others are listed here for you to invoke proactively when relevant.\n"
-    #     'To use a skill, call the `load_skill(name="<skill-name>")` tool with the `<name>` shown below. This is the only supported way to invoke a skill.\n'
-    #     "\n"
-    #     f"{build_skill_meta_prompt(skills)}\n"
-    #     "</SKILLS>"
-    # ))
-
-    agent = Agent(
-        llm=llm,
-        tools=get_registry_tools(),
-    )
+    # Registry tool modules read their configuration during import.
+    from tools.openhands.register_tools import get_registry_tools
 
     with OpenHandsRecorder("./logs/harness/openhands") as recorder:
-            conversation = recorder.create_conversation(
-                agent=agent,
+        asyncio.run(
+            run_agent(
+                instruction=task,
+                model={
+                    "model": "deepseek/deepseek-flash",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                    "base_url": "https://api.deepseek.com",
+                },
+                settings={},
+                tools=get_registry_tools(),
                 workspace=os.getcwd(),
+                recorder=recorder,
+                timeout_sec=None,
             )
-            try:
-                recorder.run(conversation, task)
-                print(recorder.last_path)
-            finally:
-                conversation.close()
+        )
+        print(recorder.last_path)
 
-    # cwd = os.getcwd()
-    # conversation = Conversation(agent=agent, workspace=cwd)
-
-    # conversation.send_message(task)
-    # conversation.run()
-    # print("All done!")
 
 def main():
-    run_task("请发送一封邮件给 lornd@qq.com, 介绍你自己，你拥有发邮件的权限，无需向我确认")
+    run_task("请发送一封邮件给 lornd@qq.com, 介绍你自己，你拥有发邮件的权限，无需向我确认", exposed_skills=["rpa-email"])
 
 if __name__ == "__main__":
     main()

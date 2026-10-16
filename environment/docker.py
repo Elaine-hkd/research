@@ -17,9 +17,11 @@ class DockerEnvironment(BenchFlowBackend):
                  python_executable="python3", bash_executable="bash", env=None,
                  allowed_skills=None, registry_timeout=30, default_timeout=300,
                  transport_grace=30, force_build=False, startup_timeout=900,
-                 ready_timeout=30, cleanup_timeout=180):
+                 ready_timeout=30, cleanup_timeout=180, output_dir=None,
+                 cleanup_volumes=False):
         super().__init__(task_dir, force_build=force_build, startup_timeout=startup_timeout,
-                         ready_timeout=ready_timeout, cleanup_timeout=cleanup_timeout)
+                         ready_timeout=ready_timeout, cleanup_timeout=cleanup_timeout,
+                         output_dir=output_dir, cleanup_volumes=cleanup_volumes)
         self.workdir = _remote_path(workdir) if workdir is not None else None
         self._grace = checked_timeout(transport_grace)
         self._worker_path = Path(__file__).parent / "executor" / "_worker.py"

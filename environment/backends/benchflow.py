@@ -99,14 +99,27 @@ async def _stream_compose_build(sandbox, command, *, check=True, timeout_sec=Non
     return result
 
 
-def _make_runtime(task_dir: Path, run_id: str):
+def _make_runtime(task_dir: Path, run_id: str, output_dir: Path | None = None):
     # Lazy import: importing this package or running mock tests starts nothing.
     try:
         version("benchflow")
     except PackageNotFoundError as exc:
         raise EnvironmentError("Install benchflow==0.7.8 in this Python environment first") from exc
     from benchflow import Environment as RuntimeEnvironment
-    runtime = RuntimeEnvironment.from_task(task_dir, sandbox="docker", rollout_name=run_id)
+    if output_dir is None:
+        runtime = RuntimeEnvironment.from_task(task_dir, sandbox="docker", rollout_name=run_id)
+    else:
+        from benchflow.contracts import default_rollout_planes
+        from benchflow.task import RolloutPaths, Task
+
+        paths = RolloutPaths(rollout_dir=output_dir)
+        paths.mkdir()
+        inner = default_rollout_planes().create_environment(
+            "docker", task=Task(task_dir), task_path=task_dir,
+            rollout_name=run_id, rollout_paths=paths,
+            preserve_agent_network=False, environment_manifest=None,
+        )
+        runtime = RuntimeEnvironment(inner=inner, task_path=task_dir, sandbox="docker")
     original_command = runtime.inner._run_docker_compose_command
 
     async def run_compose(command, check=True, timeout_sec=None):
@@ -132,7 +145,8 @@ class BenchFlowBackend:
 
     def __init__(self, task_dir: str | Path, *, force_build: bool = False,
                  startup_timeout: float = 900, ready_timeout: float = 30,
-                 cleanup_timeout: float = 180):
+                 cleanup_timeout: float = 180, output_dir: str | Path | None = None,
+                 cleanup_volumes: bool = False):
         self.task_dir = Path(task_dir).resolve()
         if not self.task_dir.is_dir():
             raise ValueError(f"Task directory does not exist: {self.task_dir}")
@@ -143,6 +157,8 @@ class BenchFlowBackend:
         self.startup_timeout = _seconds(startup_timeout)
         self.ready_timeout = _seconds(ready_timeout)
         self.cleanup_timeout = _seconds(cleanup_timeout)
+        self.output_dir = Path(output_dir).resolve() if output_dir is not None else None
+        self.cleanup_volumes = cleanup_volumes
         self.state = "new"
         self._runtime = None
         self._lock = asyncio.Lock()
@@ -155,7 +171,7 @@ class BenchFlowBackend:
                 raise EnvironmentError(f"Cannot start environment in state {self.state}; create a new instance")
             self.state = "starting"
             try:
-                self._runtime = _make_runtime(self.task_dir, self.run_id)
+                self._runtime = _make_runtime(self.task_dir, self.run_id, self.output_dir)
                 await asyncio.wait_for(self._runtime.start(force_build=self.force_build), self.startup_timeout)
                 await self._probe(self.ready_timeout)
                 self.state = "running"
@@ -241,12 +257,40 @@ class BenchFlowBackend:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 await self._runtime.download_file(source, destination)
 
+    async def verify(self) -> dict:
+        """Run the native task verifier against this environment, after the agent.
+
+        Keep BenchFlow-specific hardening, reward parsing and mount paths here.
+        The evaluation runner does not need access to the private runtime.
+        """
+        from benchflow.sandbox.lockdown import harden_before_verify
+        from benchflow.task.verifier import Verifier
+
+        async with self._lock:
+            self._require_running()
+            task = self._runtime.task
+            sandbox = self._runtime.inner
+            await harden_before_verify(sandbox, task, sandbox_user=None)
+            result = await Verifier(task, sandbox.rollout_paths, sandbox).verify()
+            if result.rewards is None:
+                raise EnvironmentError("Verifier returned no rewards")
+            return result.rewards
+
     async def _cleanup(self):
         if self._runtime is not None:
             # The public inner handle bypasses Environment.stop's _started gate:
             # start() may fail AFTER partial provisioning but BEFORE _started=True.
             # delete=False avoids BenchFlow's `down --rmi all --volumes` path.
-            await asyncio.wait_for(self._runtime.inner.stop(delete=False), self.cleanup_timeout)
+            async def stop_runtime():
+                await self._runtime.inner.stop(delete=False)
+                if self.cleanup_volumes:
+                    # Remove only this experiment's Compose volumes; retain images.
+                    await self._runtime.inner._run_docker_compose_command(
+                        ["down", "--volumes", "--remove-orphans", "-t", "5"],
+                        timeout_sec=90,
+                    )
+
+            await asyncio.wait_for(stop_runtime(), self.cleanup_timeout)
             self._runtime = None
 
     async def destroy(self) -> None:

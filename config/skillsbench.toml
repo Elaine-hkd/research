@@ -1,0 +1,38 @@
+name = "skillsbench-openhands"
+# Paths are relative to this TOML file. Each invocation gets a unique run folder.
+output_dir = "../logs/evaluation"
+conditions = ["no-skill", "with-skill"]
+repeats = 1
+pass_threshold = 1.0
+
+[dataset]
+index = "../data/task/skillsbench.json"
+# Delete this line to select the complete index.
+task_ids = ["3d-scan-calc"]
+loader = "evaluation.skillsbench:load_tasks"
+prepare = "evaluation.skillsbench:prepare_task"
+
+[model]
+model = "deepseek/deepseek-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 120
+num_retries = 0
+# Optional SDK fields, when supported by the selected model:
+# temperature = 0.0
+# max_output_tokens = 8192
+# reasoning_effort = "high"
+
+[agent]
+runner = "evaluation.openhands:run_agent"
+max_iterations = 100
+tool_timeout_sec = 120
+max_output_chars = 20000
+# Omit timeout_sec to honor each task's agent.timeout_sec.
+
+[evaluator]
+function = "evaluation.evaluators:skillsbench_verifier"
+
+[environment]
+startup_timeout = 1800
+cleanup_timeout = 180

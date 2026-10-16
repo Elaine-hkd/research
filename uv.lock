@@ -23,6 +23,18 @@ wheels = [
 ]
 
 [[package]]
+name = "agent-session-analyzer"
+version = "0.1.0"
+source = { editable = "../agent-session-analyzer" }
+
+[package.metadata]
+requires-dist = [
+    { name = "deepseek-harness-sdk", marker = "extra == 'dsh'", specifier = ">=0.1.5rc1" },
+    { name = "openhands-sdk", marker = "extra == 'openhands'", specifier = ">=1.49.1,<1.50" },
+]
+provides-extras = ["dsh", "openhands"]
+
+[[package]]
 name = "aiofile"
 version = "3.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3602,6 +3614,7 @@ name = "research"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "agent-session-analyzer" },
     { name = "benchflow" },
     { name = "deepseek-harness-sdk" },
     { name = "loguru" },
@@ -3610,6 +3623,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-session-analyzer", editable = "../agent-session-analyzer" },
     { name = "benchflow", specifier = "==0.7.8" },
     { name = "deepseek-harness-sdk", specifier = ">=0.1.5rc1" },
     { name = "loguru", specifier = ">=0.7.3" },
