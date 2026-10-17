@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 import json
 import math
@@ -20,8 +20,8 @@ from .config import load_function
 from .contracts import AgentResult, PreparedTask, Score, TrialContext
 
 
-def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _local_time() -> str:
+    return datetime.now().astimezone().isoformat()
 
 
 def _versions() -> dict:
@@ -81,7 +81,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     if not secret:
         raise ValueError(f"Set model credential environment variable {key_name} before running")
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     output = Path(config["output_dir"]) / f"{config['name']}-{stamp}-{uuid4().hex[:8]}"
     output.mkdir(parents=True)
     
@@ -89,7 +89,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     total = len(tasks) * len(conditions) * repeats
     
     manifest = {
-        "schema_version": 1, "started_at": _utc(), "config": config,
+        "schema_version": 1, "started_at": _local_time(), "config": config,
         "versions": _versions(), "planned_trials": total,
         "tasks": [asdict(task) for task in tasks],
         "components": {
@@ -114,7 +114,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                     row = {
                         "schema_version": 1, "trial_id": trial_id,
                         "task_id": task.id, "condition": condition, "repeat": repeat,
-                        "model": config["model"]["model"], "started_at": _utc(),
+                        "model": config["model"]["model"], "started_at": _local_time(),
                         "dataset_index": dataset["index"],
                         "agent_runner": manifest["components"]["agent"],
                         "evaluator": manifest["components"]["evaluator"],
@@ -169,7 +169,15 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         partial_agent = trial_dir / "agent" / "result.json"
                         if row["agent"] is None and partial_agent.is_file():
                             row["agent"] = json.loads(partial_agent.read_text(encoding="utf-8"))
-                        row.update(finished_at=_utc(), duration_sec=time.monotonic() - started)
+                        trace_path = (row["agent"] or {}).get("trace_path")
+                        if trace_path:
+                            path = Path(trace_path)
+                            if not path.is_absolute():
+                                path = trial_dir / path
+                            path = path.resolve()
+                            base = trial_dir.resolve()
+                            row["trace_path"] = path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
+                        row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
                         # Reward remains useful if only cleanup failed; status exposes it.
                         safe_row = redact(row, secret)
                         write_json(trial_dir / "result.json", safe_row)
@@ -178,7 +186,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
                         print(f"  {trial_id}: {row['status']}, reward={row['reward']}", flush=True)
     finally:
-        manifest["finished_at"] = _utc()
+        manifest["finished_at"] = _local_time()
         manifest["recorded_trials"] = len(rows)
         interrupted = len(rows) < total or any(
             error["type"] in {"CancelledError", "KeyboardInterrupt"}
