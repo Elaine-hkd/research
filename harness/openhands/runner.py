@@ -153,10 +153,19 @@ async def run_agent(*, instruction: str, model: dict, settings: dict,
         if executor is not None:
             await executor.drain()
         metrics = llm.metrics
+        tokens = metrics.accumulated_token_usage.model_dump(mode="json") if metrics.token_usages else None
         result.usage = {
-            "tokens": metrics.accumulated_token_usage.model_dump(mode="json") if metrics.token_usages else None,
+            "tokens": tokens,  # Preserve the SDK representation for existing callers.
+            "input_tokens": tokens.get("prompt_tokens") if tokens else None,
+            "output_tokens": tokens.get("completion_tokens") if tokens else None,
+            "total_tokens": tokens.get("total_tokens") if tokens else None,
+            "cache_read_tokens": tokens.get("cache_read_tokens") if tokens else None,
+            "cache_write_tokens": tokens.get("cache_write_tokens") if tokens else None,
+            "reasoning_tokens": tokens.get("reasoning_tokens") if tokens else None,
             "cost_usd": metrics.accumulated_cost if metrics.costs else None,
         }
+        if recorder is not None and recorder.last_path is not None:
+            result.trace_path = str(recorder.last_path)
         if executor is not None:
             result.usage["shell_calls"] = executor.calls
         try:

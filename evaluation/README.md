@@ -1,5 +1,7 @@
 # 标准评估流程
 
+实验轨迹展示、condition 对比及新 harness 的适配方法见 [可视化接入指南](VISUALIZATION.md)。
+
 在 `E:\lornd\research` 使用现有 Python 3.12+ 环境。默认配置只选 `3d-scan-calc`，
 各执行一次 `no-skill` 和 `with-skill`，便于先联调完整流程。
 
@@ -93,7 +95,7 @@ reward 缺失、格式无效、API 或环境失败时保留 `reward: null` 和�
 ## 结果目录
 
 ```text
-logs/evaluation/<实验名>-<UTC时间>-<随机ID>/
+logs/evaluation/<实验名>-<本地时间>-<随机ID>/
   manifest.json                 配置、任务来源、文本哈希、依赖版本、计划数量
   results.jsonl                 每个 trial 结束就追加一条
   summary.json                  每个 trial 结束更新汇总
@@ -103,6 +105,7 @@ logs/evaluation/<实验名>-<UTC时间>-<随机ID>/
     task-info.json              来源与暴露的技能清单
     result.json                 reward、passed、结束原因、用量、耗时、错误阶段
     agent/events.jsonl          OpenHands 原生事件
+    agent/trace/*.jsonl         harness-trace/1，含模型尝试与工具记录
     agent/tool-calls.jsonl      容器命令与未截断的 stdout/stderr
     agent/result.json           最终回答、结束原因与用量（缺失用量为 null）
     verifier/                   原生 reward、验证输出及测试报告
@@ -110,7 +113,14 @@ logs/evaluation/<实验名>-<UTC时间>-<随机ID>/
     error.txt                   失败时的异常链
 ```
 
-JSON 产物使用 `schema_version = 1`。事件文件使用 OpenHands 原生 schema。
+实验目录时间使用运行机器的本地时区，格式为 `YYYYMMDD-HHMMSS`，例如
+`skillsbench-openhands-20261016-164236-a1b2c3d4`。`started_at` / `finished_at`
+使用带时区偏移的本地 ISO 时间，例如 `2026-10-16T16:42:36+08:00`。
+已有实验目录和记录保留原时间格式。
+
+JSON 产物使用 `schema_version = 1`。`events.jsonl` 保留 OpenHands 原生事件；
+`agent/trace/` 使用 `harness-trace/1`。trial 结果中的 `trace_path` 相对该 trial 目录，
+指向标准 trace；旧实验没有此字段时，查看器读取 `agent/events.jsonl`。
 `status=completed` 表示流程完成，是否完成任务看 `passed` 与 `reward`；cleanup 失败会将
 status 标成 error，已取得的有效 reward 仍保留。`errors[].stage` 区分 prepare、environment、
 skills、agent、evaluate、cleanup。
