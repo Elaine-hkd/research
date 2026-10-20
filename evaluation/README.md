@@ -7,6 +7,7 @@
 | 模块 | 职责 |
 | --- | --- |
 | `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
+| `evaluation/dataset.py` | 共用任务加载入口，按数据集配置随机采样 |
 | `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
 | `harness/runner.py` | 公共 `run_agent`，检查公共参数，创建和关闭配置的 recorder，调用执行函数 |
 | `harness/<名称>/runner.py` | `execute` 绑定工具、运行 SDK、处理中断和收尾，返回 `AgentResult` |
@@ -20,7 +21,7 @@
 
 ```powershell
 Set-Location E:\lornd\research
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --plan
 ```
 
 预期打印选定任务、模型、`conditions: ["with-skill"]`、各组件引用和 `planned_trials: 1`。
@@ -41,7 +42,7 @@ setup 将访问范围限制为这份清单，不会上传数据集技能到远�
 镜像需提供 python3 和技能依赖；现有下载协议只支持 UTF-8 文本资源。
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml
 ```
 
 构建进度、OpenHands 事件类型和阶段切换会持续打印。每个 trial 使用新的 Compose 项目；
@@ -51,13 +52,14 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 ## 修改实验
 
-配置文件是 `config/skillsbench.toml`，其中路径相对配置文件所在目录解析。
+配置文件是 `config/skillsbench-openhands.toml`，其中路径相对配置文件所在目录解析。
 
 | 要改变的内容 | 配置项 |
 | --- | --- |
 | 模型及服务地址 | `[model] model`、`base_url`、`api_key_env` |
 | 模型采样与输出预算 | `[model] temperature`、`max_output_tokens`、`reasoning_effort` 等 OpenHands LLM 参数 |
 | 数据集及任务集合 | `[dataset] index`、`task_ids`、`loader`、`prepare` |
+| 随机采样数量及种子 | `[dataset] sample_size`、`seed`，可省略 |
 | 环境启动后的数据集设置 | `[dataset] setup`，可省略 |
 | harness | `[agent] runner`，直接引用 `harness.<名称>.runner:execute` |
 | 记录器 | `[agent] recorder`，例如 `agent_session_analyzer:OpenHandsRecorder`；省略则不录制标准 trace |
@@ -73,8 +75,30 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 删除 `dataset.task_ids` 一行选择完整索引。也可单次覆盖任务集合：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --task 3d-scan-calc citation-check
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --task 3d-scan-calc citation-check
 ```
+
+要从完整索引随机抽取 10 个任务，删除 `[dataset]` 中的 `task_ids` 行，并设置：
+
+```toml
+[dataset]
+index = "../data/task/skillsbench.json"
+sample_size = 10
+seed = 42
+loader = "datasets.skillsbench:load_tasks"
+prepare = "datasets.skillsbench:prepare_task"
+setup = "datasets.skillsbench:setup_environment"
+```
+
+`sample_size` 必须是正整数且不超过候选任务数；无放回采样不会重复抽取任务。
+保留 `task_ids` 或使用 `--task` 时，只从该列表中采样。`seed` 是可选整数，支持 0；
+相同候选任务及顺序、相同数量和种子得到相同任务及执行顺序。省略 `seed` 时每次随机抽样；
+只设置 `seed` 而没有 `sample_size` 会报错。不配置这两项时，原有选取和顺序保持不变。
+
+`--plan` 输出实际采样的任务列表、数量和种子，不调用模型或启动 Docker。
+同次评测的所有 condition 和 repeat 共用一次采样结果；`manifest.json` 保存配置及实际任务清单。
+命令行和 `run_evaluation(config)` 共用此逻辑；显式传入 `tasks=...` 时按该列表直接评测，不再采样。
+数据集 loader 仍使用原有 `(index, task_ids)` 接口，更换数据集无需额外实现采样参数。
 
 没有指定 `agent.timeout_sec` 时，使用各任务 frontmatter 中的 `agent.timeout_sec`；
 verifier 超时、服务、环境变量和 hardening 由任务原配置及 BenchFlow 处理。
@@ -87,15 +111,15 @@ verifier 超时、服务、环境变量和 hardening 由任务原配置及 Bench
 和预算相同，便于需要时另行比较：
 
 - `config/skillsbench-shell-only.toml`：shell + 本地 think/finish。
-- `config/skillsbench.toml`：与 main.py 相同的四个 registry 工具 + 本地 think/finish。
+- `config/skillsbench-openhands.toml`：与 main.py 相同的四个 registry 工具 + 本地 think/finish。
 
 在项目根目录先看计划，再分别执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml --plan
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --plan
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml
 ```
 
 plan 输出应分别列出 3 和 6 个工具名称，各计划 1 个 trial。plan 通过公共 validate_tools

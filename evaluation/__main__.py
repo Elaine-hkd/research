@@ -1,16 +1,17 @@
-"""Run with: python -m evaluation --config config/skillsbench.toml [--plan]."""
+"""Run with: python -m evaluation --config config/skillsbench-openhands.toml [--plan]."""
 
 import argparse
 import asyncio
 import json
 from pathlib import Path
 
-from .config import load_config, load_function
+from .config import load_config
+from .dataset import load_tasks
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate an agent on isolated task environments")
-    parser.add_argument("--config", type=Path, default=Path("config/skillsbench.toml"))
+    parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
     parser.add_argument("--plan", action="store_true", help="Read config and tasks only; no model calls or Docker")
     parser.add_argument("--task", nargs="+", help="Override dataset.task_ids")
     args = parser.parse_args()
@@ -19,12 +20,13 @@ def main() -> int:
         config["dataset"]["task_ids"] = args.task
     dataset = config["dataset"]
     
-    tasks = load_function(dataset["loader"])(Path(dataset["index"]), dataset.get("task_ids"))
+    tasks = load_tasks(dataset)
     if args.plan:
         print(json.dumps({
             "name": config["name"], "model": config["model"]["model"],
             "tasks": [task.id for task in tasks], "conditions": config["conditions"],
             "repeats": config["repeats"],
+            "sample_size": dataset.get("sample_size"), "seed": dataset.get("seed"),
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
             "output_dir": config["output_dir"],
             "agent_runner": config["agent"]["runner"], "evaluator": config["evaluator"]["function"],

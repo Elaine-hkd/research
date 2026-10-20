@@ -2,13 +2,16 @@ name = "skillsbench-dsh"
 # Paths are relative to this TOML file; every invocation gets its own run folder.
 output_dir = "../logs/evaluation"
 conditions = ["with-skill"]
-repeats = 1
+repeats = 3
 pass_threshold = 1.0
 
 [dataset]
 index = "../data/task/skillsbench.json"
-# Delete this line to select the complete index.
-task_ids = ["3d-scan-calc"]
+# Delete task_ids to use the complete index as the candidate pool.
+# task_ids = ["3d-scan-calc"]
+# Optional: sample without replacement from the candidate pool.
+sample_size = 10
+seed = 42
 loader = "datasets.skillsbench:load_tasks"
 prepare = "datasets.skillsbench:prepare_task"
 setup = "datasets.skillsbench:setup_environment"

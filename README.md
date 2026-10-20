@@ -1,6 +1,6 @@
 # Research
 
-SkillsBench 评估入口：`python -m evaluation --config config/skillsbench.toml`。
+SkillsBench 评估入口：`python -m evaluation --config config/skillsbench-openhands.toml`。
 
 通用 `evaluation` 调度实验；`datasets/skillsbench.py` 负责数据准备、技能注入和原生评分；
 `harness/runner.py` 提供公共 run_agent，管理配置的 recorder 和公共参数检查；

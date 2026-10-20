@@ -18,6 +18,7 @@ from harness.runner import run_agent as run_harness
 from .artifacts import append_jsonl, redact, summarize, write_json
 from .config import load_function
 from .contracts import PreparedTask, Score, TrialContext
+from .dataset import load_tasks
 
 
 def _local_time() -> str:
@@ -50,6 +51,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
 
     Dataset: load(index, ids) -> list[Task]; prepare(task, destination, condition)
     -> PreparedTask. Optional setup: async (context) after environment.start().
+    Configured tasks are sampled once; explicit tasks are already selected.
     Agent: common run_agent calls the configured execute(**native_options).
     No evaluation objects are passed to harnesses or their recorders.
     Evaluator: async (context, agent_result) -> Score. Environments are external factories.
@@ -57,7 +59,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     # 加载数据集和任务
     dataset = config["dataset"]
     if tasks is None:
-        tasks = load_function(dataset["loader"])(Path(dataset["index"]), dataset.get("task_ids"))
+        tasks = load_tasks(dataset)
     tasks = list(tasks)
     if not tasks:
         raise ValueError("Dataset selected no tasks")
