@@ -6,8 +6,10 @@ from urllib.parse import urljoin
 def json_text(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
-def get_json(endpoint: str, params: dict[str, str]) -> str:
+def get_json(endpoint: str, params: dict[str, str], *, registry=None) -> str:
     """对应原代码的 request()：读取 JSON，再序列化为文本。"""
+    if registry is not None:
+        return json_text(registry.request(endpoint, params))
     base_url = os.environ.get("SKILL_REGISTRY_URL")
     if not base_url:
         raise RuntimeError("Missing SKILL_REGISTRY_URL")

@@ -33,6 +33,10 @@ class DockerEnvironment(BenchFlowBackend):
         )
 
     async def _run_worker(self, payload):
+        # A missing override means the image's working directory. The worker
+        # resolves '.' before running the downloaded resource in its temp tree.
+        if payload["workdir"] is None:
+            payload = {**payload, "workdir": "."}
         # Serialize the complete transfer/execute/cleanup transaction with destroy.
         async with self._lock:
             self._require_running()

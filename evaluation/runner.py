@@ -13,11 +13,11 @@ import time
 import traceback
 from uuid import uuid4
 
-from environment import DockerEnvironment
+from harness.runner import run_agent as run_harness
 
 from .artifacts import append_jsonl, redact, summarize, write_json
 from .config import load_function
-from .contracts import AgentResult, PreparedTask, Score, TrialContext
+from .contracts import PreparedTask, Score, TrialContext
 
 
 def _local_time() -> str:
@@ -26,7 +26,7 @@ def _local_time() -> str:
 
 def _versions() -> dict:
     found = {}
-    for package in ("benchflow", "openhands-sdk", "litellm"):
+    for package in ("benchflow", "openhands-sdk", "deepseek-harness-sdk", "litellm"):
         try:
             found[package] = version(package)
         except PackageNotFoundError:
@@ -43,26 +43,18 @@ def _score(score: Score) -> None:
     json.dumps(score.metrics, allow_nan=False)
 
 
-async def _inject_skills(context: TrialContext) -> None:
-    if context.condition == "with-skill":
-        if context.prepared.skills_dir is None:
-            raise ValueError("with-skill task preparation did not supply skills_dir")
-        exists = await context.environment.execute(["test", "!", "-e", "/skills"])
-        if not exists.success:
-            raise ValueError("Task image already contains /skills; refuse to merge skill sources")
-        await context.environment.upload(context.prepared.skills_dir, "/skills")
-    elif context.prepared.skills_dir is not None or context.prepared.skill_catalog:
-        raise ValueError("no-skill task preparation exposed skills")
-
-
 async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
-                         run_agent=None, evaluate=None, create_environment=DockerEnvironment) -> Path:
+                         setup_environment=None, run_agent=None, evaluate=None,
+                         create_environment=None) -> Path:
     """Replace any component by passing a function, or configure module:function.
 
     Dataset: load(index, ids) -> list[Task]; prepare(task, destination, condition)
-    -> PreparedTask. Agent: async (context, model, settings) -> AgentResult.
-    Evaluator: async (context, agent_result) -> Score.
+    -> PreparedTask. Optional setup: async (context) after environment.start().
+    Agent: common run_agent calls the configured execute(**native_options).
+    No evaluation objects are passed to harnesses or their recorders.
+    Evaluator: async (context, agent_result) -> Score. Environments are external factories.
     """
+    # 加载数据集和任务
     dataset = config["dataset"]
     if tasks is None:
         tasks = load_function(dataset["loader"])(Path(dataset["index"]), dataset.get("task_ids"))
@@ -72,15 +64,29 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     ids = [task.id for task in tasks]
     if len(set(ids)) != len(ids) or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) for value in ids):
         raise ValueError("Task ids must be unique, non-empty and valid path components")
+    
+    
     prepare_task = prepare_task or load_function(dataset["prepare"])
+    if setup_environment is None and dataset.get("setup") is not None:
+        setup_environment = load_function(dataset["setup"])
     run_agent = run_agent or load_function(config["agent"]["runner"])
     evaluate = evaluate or load_function(config["evaluator"]["function"])
-    
+    environment_options = dict(config["environment"])
+    factory = environment_options.pop("factory", None)
+    if create_environment is None:
+        if factory is None:
+            raise ValueError("Configure environment.factory or pass create_environment")
+        create_environment = load_function(factory)
+    agent_options = dict(config["agent"])
+    agent_options.pop("runner", None)
+    recorder = agent_options.pop("recorder", None)
+    tools = agent_options.pop("tools", None)
     key_name = config["model"]["api_key_env"]
     secret = os.environ.get(key_name)
     if not secret:
         raise ValueError(f"Set model credential environment variable {key_name} before running")
 
+    # 设置输出目录
     stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     output = Path(config["output_dir"]) / f"{config['name']}-{stamp}-{uuid4().hex[:8]}"
     output.mkdir(parents=True)
@@ -94,7 +100,10 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
         "tasks": [asdict(task) for task in tasks],
         "components": {
             "prepare": f"{prepare_task.__module__}:{prepare_task.__qualname__}",
+            "setup": (f"{setup_environment.__module__}:{setup_environment.__qualname__}"
+                      if setup_environment is not None else None),
             "agent": f"{run_agent.__module__}:{run_agent.__qualname__}",
+            "recorder": recorder,
             "evaluator": f"{evaluate.__module__}:{evaluate.__qualname__}",
             "environment": f"{create_environment.__module__}:{create_environment.__qualname__}",
         },
@@ -124,6 +133,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                     stage, environment = "prepare", None
                     print(f"[{len(rows) + 1}/{total}] {trial_id}: prepare", flush=True)
                     try:
+                        # 准备任务
                         prepared = prepare_task(task, trial_dir / "task", condition)
                         if not isinstance(prepared, PreparedTask):
                             raise TypeError("Dataset preparer must return evaluation.PreparedTask")
@@ -131,22 +141,45 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                             "task_id": task.id, "source": task.source,
                             "skill_catalog": prepared.skill_catalog,
                         })
+
+                        # 初始化环境
                         stage = "environment"
                         environment = create_environment(
                             prepared.task_dir, output_dir=trial_dir,
-                            workdir=None, cleanup_volumes=True, **config["environment"],
+                            **environment_options,
                         )
-                        row["environment_id"] = environment.run_id
+                        row["environment_id"] = getattr(environment, "run_id", None)
                         await environment.start()
                         context = TrialContext(task, prepared, environment, trial_dir, condition, repeat)
-                        stage = "skills"
-                        await _inject_skills(context)
+                        
+                        # 设置环境
+                        stage = "setup"
+                        if setup_environment is not None:
+                            await setup_environment(context)
+
+                        # 智能体运行
                         stage = "agent"
                         print(f"  {trial_id}: agent", flush=True)
-                        agent_result = await run_agent(context, config["model"], config["agent"])
-                        if not isinstance(agent_result, AgentResult):
-                            raise TypeError("Agent runner must return evaluation.AgentResult")
+                        agent_result = await run_harness(
+                            runner=run_agent,
+                            recorder=recorder,
+                            instruction=task.instruction,
+                            model=config["model"],
+                            tools=tools,
+                            settings=dict(agent_options),
+                            environment=environment,
+                            output_dir=trial_dir / "agent",
+                            timeout_sec=task.agent_timeout_sec,
+                            skill_catalog=prepared.skill_catalog,
+                            metadata={
+                                "experiment_id": output.name, "experiment_name": output.name,
+                                "trial_id": trial_id, "task_id": task.id,
+                                "condition": condition, "repeat": repeat,
+                            },
+                        )
                         row["agent"] = asdict(agent_result)
+
+                        #评估任务结果
                         stage = "evaluate"
                         print(f"  {trial_id}: evaluate", flush=True)
                         score = await evaluate(context, agent_result)
@@ -160,6 +193,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         if not isinstance(exc, Exception):
                             raise
                     finally:
+                        # 清理环境
                         if environment is not None:
                             try:
                                 await environment.destroy()
@@ -186,6 +220,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
                         print(f"  {trial_id}: {row['status']}, reward={row['reward']}", flush=True)
     finally:
+        # 保存结果
         manifest["finished_at"] = _local_time()
         manifest["recorded_trials"] = len(rows)
         interrupted = len(rows) < total or any(

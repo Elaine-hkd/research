@@ -1,7 +1,18 @@
 """Result shared by harness implementations and their callers."""
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
+
+
+def task_prompt(instruction: str, skill_catalog: list[dict[str, str]] | None = None) -> str:
+    if not skill_catalog:
+        return instruction
+    return instruction + (
+        "\n\nAvailable task skills (read SKILL.md before using a skill):\n"
+        + json.dumps([{key: skill[key] for key in ("name", "description", "path")}
+                      for skill in skill_catalog], ensure_ascii=False, indent=2)
+    )
 
 
 @dataclass

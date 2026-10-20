@@ -1,0 +1,52 @@
+name = "skillsbench-dsh"
+# Paths are relative to this TOML file; every invocation gets its own run folder.
+output_dir = "../logs/evaluation"
+conditions = ["with-skill"]
+repeats = 1
+pass_threshold = 1.0
+
+[dataset]
+index = "../data/task/skillsbench.json"
+# Delete this line to select the complete index.
+task_ids = ["3d-scan-calc"]
+loader = "datasets.skillsbench:load_tasks"
+prepare = "datasets.skillsbench:prepare_task"
+setup = "datasets.skillsbench:setup_environment"
+
+[model]
+# Native dsh route, as in harness/dsh/main.py. For paired comparisons, verify
+# that both harness configurations select the same server-side model version.
+provider = "deepseek-official"
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+# max_tokens = 8192
+# reasoning_effort = "high"
+
+[agent]
+runner = "harness.dsh.runner:execute"
+recorder = "agent_session_analyzer:DshRecorder"
+# Omit dsh_home to use this project's config/dsh directory.
+profile = "sdk-minimal"
+tool_timeout_sec = 120
+max_output_chars = 20000
+tools = [
+    "search_skills",
+    "load_skill",
+    "load_resource",
+    "execute_resource",
+    "terminal",
+    "read_file",
+    "write_file"
+]
+# Omit timeout_sec to honor each task's agent.timeout_sec.
+# OpenHands max_iterations is not a DeepSeekHarnessConfig option.
+
+[evaluator]
+function = "datasets.skillsbench:evaluate"
+
+[environment]
+factory = "datasets.skillsbench:create_environment"
+registry_url = "http://127.0.0.1:5000"
+startup_timeout = 1800
+cleanup_timeout = 180

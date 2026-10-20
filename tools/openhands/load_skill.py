@@ -3,7 +3,7 @@ from typing import ClassVar
 from pydantic import Field
 
 from openhands.sdk import Action, ToolDefinition
-from openhands.sdk.tool import Tool, ToolExecutor
+from openhands.sdk.tool import ToolExecutor
 
 from tools.openhands.utils import get_json
 from tools.openhands.observation import RegistryObservation
@@ -17,12 +17,16 @@ class LoadSkillAction(Action):
 class LoadSkillExecutor(
     ToolExecutor[LoadSkillAction, RegistryObservation]
 ):
+    def __init__(self, registry=None):
+        self.registry = registry
+
     def __call__(
         self, action: LoadSkillAction, conversation=None
     ) -> RegistryObservation:
         result = get_json(
             "/load_skill",
             {"skill_name": action.name},
+            registry=self.registry,
         )
         return RegistryObservation.from_text(result)
 
@@ -33,7 +37,7 @@ class LoadSkillTool(
     name: ClassVar[str] = "load_skill"
 
     @classmethod
-    def create(cls, conv_state, **params):
+    def create(cls, conv_state=None, *, registry=None, **params):
         return [
             cls(
                 description=(
@@ -41,6 +45,6 @@ class LoadSkillTool(
                 ),
                 action_type=LoadSkillAction,
                 observation_type=RegistryObservation,
-                executor=LoadSkillExecutor(),
+                executor=LoadSkillExecutor(registry),
             )
         ]

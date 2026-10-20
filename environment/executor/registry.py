@@ -33,22 +33,44 @@ class RegistryClient:
             raise ValueError("allowed_skills must be a collection of skill names")
         self.allowed = None if allowed_skills is None else frozenset(allowed_skills)
 
-    def _get(self, endpoint, skill_name, **params):
-        if not isinstance(skill_name, str) or not skill_name.strip():
-            raise ValueError("skill_name must be a non-empty string")
-        if self.allowed is not None and skill_name not in self.allowed:
-            raise ValueError(f"Unknown or disallowed skill: {skill_name!r}")
-        url = self.url + endpoint + "?" + urlencode({"skill_name": skill_name, **params})
+    def request(self, endpoint, params):
+        """Return the original JSON envelope, enforcing this client's skill scope."""
+        params = dict(params)
+        if endpoint == "/search_skills":
+            if self.allowed is not None:
+                # Some registries treat [] as no filter. Enforce empty locally.
+                if not self.allowed:
+                    return {"count": 0, "skills": []}
+                params["exposed_skills"] = json.dumps(sorted(self.allowed))
+        elif endpoint in {"/load_skill", "/load_resource"}:
+            skill_name = params.get("skill_name")
+            if not isinstance(skill_name, str) or not skill_name.strip():
+                raise ValueError("skill_name must be a non-empty string")
+            if self.allowed is not None and skill_name not in self.allowed:
+                raise ValueError(f"Unknown or disallowed skill: {skill_name!r}")
+        else:
+            raise ValueError(f"Unsupported registry read endpoint: {endpoint!r}")
+        url = self.url + endpoint + "?" + urlencode(params)
         try:
             with urlopen(Request(url, headers={"Accept": "application/json"}), timeout=self.timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            raise ExecutionError(f"Registry {endpoint} HTTP {exc.code} for skill {skill_name!r}") from exc
+            raise ExecutionError(f"Registry {endpoint} HTTP {exc.code}") from exc
         except (URLError, OSError, ValueError) as exc:
             raise ExecutionError(f"Registry {endpoint} request failed: {exc}") from exc
         if not isinstance(data, dict):
             raise ExecutionError(f"Registry {endpoint} must return a JSON object")
+        if endpoint == "/search_skills" and self.allowed is not None:
+            skills = data.get("skills")
+            if not isinstance(skills, list):
+                raise ExecutionError("Invalid /search_skills response")
+            skills = [skill for skill in skills
+                      if (skill.get("name") if isinstance(skill, dict) else skill) in self.allowed]
+            data = {**data, "skills": skills, "count": len(skills)}
         return data
+
+    def _get(self, endpoint, skill_name, **params):
+        return self.request(endpoint, {"skill_name": skill_name, **params})
 
     def load_skill(self, skill_name):
         skill = self._get("/load_skill", skill_name).get("skill")
@@ -61,7 +83,18 @@ class RegistryClient:
     def load_resource(self, skill_name, relative_path):
         path = resource_path(relative_path)
         data = self._get("/load_resource", skill_name, relative_path=relative_path)
-        if (data.get("skill_name") != skill_name
+        if data.get("success") is False:
+            error = data.get("error")
+            if (not isinstance(error, dict)
+                    or not isinstance(error.get("code"), str)
+                    or not isinstance(error.get("message"), str)):
+                raise ExecutionError("Invalid /load_resource error response")
+            raise ExecutionError(
+                f"Registry /load_resource [{error['code']}]: {error['message']}"
+            )
+        if (data.get("success") is not True
+                or data.get("error") is not None
+                or data.get("skill_name") != skill_name
                 or resource_path(data.get("relative_path")) != path
                 or not isinstance(data.get("content"), str)):
             raise ExecutionError("Invalid /load_resource response")

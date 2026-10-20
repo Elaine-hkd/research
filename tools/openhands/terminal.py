@@ -1,18 +1,15 @@
-"""OpenHands' synchronous tool executor bridges to the owning async environment."""
+"""Shared synchronous bridge for shell, file and skill operations in an environment."""
 
 import asyncio
-from dataclasses import asdict
-import json
 from pathlib import Path
 import threading
-import time
 from typing import ClassVar
 
 from openhands.sdk import Action, Observation, ToolDefinition
 from openhands.sdk.tool import ToolExecutor
 from pydantic import Field
 
-from utils.json_io import append_jsonl
+from tools.environment import EnvironmentOperations
 
 
 class ShellAction(Action):
@@ -33,8 +30,11 @@ class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
         self.timeout = timeout
         self.output_chars = output_chars
         self.log_path = log_path
-        self.failure = None
-        self.calls = 0
+        self.operations = EnvironmentOperations(
+            environment, deadline=deadline, timeout=timeout,
+            output_chars=output_chars, log_path=log_path,
+        )
+        self.calls_by_tool = self.operations.calls_by_tool
         self._pending = None
         self._closed = False
         self._guard = threading.Lock()
@@ -42,41 +42,56 @@ class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
         self._idle = threading.Event()
         self._idle.set()
 
-    async def _execute(self, action: ShellAction):
+    @property
+    def failure(self):
+        return self.operations.failure
+
+    @property
+    def calls(self):
+        return self.operations.calls
+
+    async def _execute(self, action, tool_name: str, arguments: dict, *, resource=False):
         task = asyncio.current_task()
         self._tasks.add(task)
         try:
-            remaining = self.deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Agent time budget exhausted")
-            timeout = min(action.timeout_sec, self.timeout, remaining)
-            self.calls += 1
-            append_jsonl(self.log_path, {"type": "call", "index": self.calls,
-                                       "arguments": action.model_dump(mode="json")})
-            result = await self.environment.execute(
-                ["bash", "-c", action.command], cwd=action.cwd, timeout=timeout,
-            )
-            raw = asdict(result)
-            append_jsonl(self.log_path, {"type": "result", "index": self.calls, **raw})
-            # Keep complete output on disk while bounding model context growth.
-            for key in ("stdout", "stderr"):
-                if len(raw[key]) > self.output_chars:
-                    raw[key] = raw[key][:self.output_chars] + "\n[truncated; full output saved in tool-calls.jsonl]"
-            return ShellObservation.from_text(json.dumps(raw, ensure_ascii=False))
-        except Exception as exc:
-            self.failure = exc
-            raise
+            if resource:
+                result = await self.operations.run_resource(arguments)
+            else:
+                result = await self.operations.run_command(
+                    action.command, cwd=action.cwd, timeout_sec=action.timeout_sec,
+                    tool_name=tool_name, arguments=arguments,
+                )
+            return ShellObservation.from_text(result.text, is_error=result.is_error)
         finally:
             self._tasks.discard(task)
 
     def __call__(self, action: ShellAction, conversation=None) -> ShellObservation:
+        return self.run_command(action, conversation)
+
+    def run_command(self, action: ShellAction, conversation=None, *,
+                    tool_name="terminal", arguments=None) -> ShellObservation:
+        return self._submit(
+            action, conversation, tool_name=tool_name,
+            arguments=action.model_dump(mode="json") if arguments is None else arguments,
+        )
+
+    def run_resource(self, action, conversation=None) -> ShellObservation:
+        return self._submit(
+            action, conversation, tool_name="execute_resource",
+            arguments=action.model_dump(mode="json"), resource=True,
+        )
+
+    def _submit(self, action, conversation, *, tool_name, arguments, resource=False):
         # OpenHands arun dispatches tools on worker threads. Schedule Docker I/O
         # back on the original loop; running asyncio.run here would break locks.
         with self._guard:
             if self._closed:
-                raise RuntimeError("Evaluation shell is closed")
+                raise RuntimeError("Environment execution channel is closed")
             self._idle.clear()
-            future = asyncio.run_coroutine_threadsafe(self._execute(action), self.loop)
+            future = asyncio.run_coroutine_threadsafe(
+                self._execute(action, tool_name, arguments, resource=resource),
+                self.loop,
+            )
             self._pending = future
         try:
             return future.result()
@@ -107,7 +122,7 @@ class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
 
 
 class EnvironmentShellTool(ToolDefinition[ShellAction, ShellObservation]):
-    name: ClassVar[str] = "evaluation_shell"
+    name: ClassVar[str] = "terminal"
 
     @classmethod
     def create(cls, conv_state=None, *, executor):

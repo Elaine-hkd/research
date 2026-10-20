@@ -2,21 +2,43 @@
 
 实验轨迹展示、condition 对比及新 harness 的适配方法见 [可视化接入指南](VISUALIZATION.md)。
 
+评测流程与 harness、数据集通过普通函数组合，不需要给每个 harness 新建 evaluation 文件。
+
+| 模块 | 职责 |
+| --- | --- |
+| `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
+| `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
+| `harness/runner.py` | 公共 `run_agent`，检查公共参数，创建和关闭配置的 recorder，调用执行函数 |
+| `harness/<名称>/runner.py` | `execute` 绑定工具、运行 SDK、处理中断和收尾，返回 `AgentResult` |
+| `tools/loader.py` 与 `tools/<名称>/toolset.py` | 检查工具名称，加载所选 harness 的已有工具实现 |
+| `environment/` | 环境生命周期、命令、文件传输等底层操作 |
+
+模型参数和 `[agent]` 的原生运行选项由所选 harness 解释；评测层不填入特定 SDK 的默认值。
+
 在 `E:\lornd\research` 使用现有 Python 3.12+ 环境。默认配置只选 `3d-scan-calc`，
-各执行一次 `no-skill` 和 `with-skill`，便于先联调完整流程。
+仅执行一次 `with-skill`。本次实验不运行 `no-skill`。
 
 ```powershell
 Set-Location E:\lornd\research
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --plan
 ```
 
-预期打印选定任务、模型、条件和 `planned_trials: 2`。`--plan` 只读取配置和任务索引，
+预期打印选定任务、模型、`conditions: ["with-skill"]`、各组件引用和 `planned_trials: 1`。
+`--plan` 只读取配置和任务索引，
 不导入 OpenHands / BenchFlow SDK，不需要 API key，不调用模型或启动 Docker。
 
 实际评估需要现有依赖、Docker CLI、Compose v2、运行中的 Linux Docker 引擎，
-以及任务构建、verifier 安装依赖所需的网络。任务镜像须提供 Bash；当前 OpenHands adapter
+以及任务构建、verifier 安装依赖所需的网络。任务镜像须提供 Bash；当前 OpenHands runner
 使用支持工具调用的文本模型。宿主读取项目 `.env`（已有环境变量优先），从配置中的
 `model.api_key_env` 获取模型密钥，默认是 `DEEPSEEK_API_KEY`。
+
+默认工具名称与 `harness/openhands/main.py` 一致，复用原有四个注册中心工具接口。
+评测通过 `[environment].registry_url` 设置注册中心地址，默认 `http://127.0.0.1:5000`；
+搜索、加载和执行共用环境自有的注册中心客户端，不依赖宿主的 EXPOSED_SKILLS。
+注册中心需预先注册当前任务 skill_catalog 中的技能，并保持技能正文和资源与数据集一致；
+setup 将访问范围限制为这份清单，不会上传数据集技能到远端注册中心。
+前三个工具仍读取注册中心；execute_resource 下载技能资源后，在当前 trial 容器执行。
+镜像需提供 python3 和技能依赖；现有下载协议只支持 UTF-8 文本资源。
 
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml
@@ -36,11 +58,17 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 | 模型及服务地址 | `[model] model`、`base_url`、`api_key_env` |
 | 模型采样与输出预算 | `[model] temperature`、`max_output_tokens`、`reasoning_effort` 等 OpenHands LLM 参数 |
 | 数据集及任务集合 | `[dataset] index`、`task_ids`、`loader`、`prepare` |
-| 技能对照条件 | `conditions = ["no-skill", "with-skill"]`，也可只保留一组 |
+| 环境启动后的数据集设置 | `[dataset] setup`，可省略 |
+| harness | `[agent] runner`，直接引用 `harness.<名称>.runner:execute` |
+| 记录器 | `[agent] recorder`，例如 `agent_session_analyzer:OpenHandsRecorder`；省略则不录制标准 trace |
+| 技能条件 | 本次 `conditions = ["with-skill"]` |
 | 每个任务、每组重复次数 | `repeats` |
 | 成功判定阈值 | `pass_threshold`，默认 reward >= 1.0 |
 | agent 的循环和命令预算 | `[agent] max_iterations`、`timeout_sec`、`tool_timeout_sec` |
+| 暴露给模型的工具集合 | `[agent] tools`，每项为跨 harness 使用的工具名称 |
 | 评分方式 | `[evaluator] function` |
+| 环境构造与参数 | `[environment] factory` 及其余构造参数 |
+| 容器工具读取的注册中心 | `[environment] registry_url` |
 
 删除 `dataset.task_ids` 一行选择完整索引。也可单次覆盖任务集合：
 
@@ -53,40 +81,92 @@ verifier 超时、服务、环境变量和 hardening 由任务原配置及 Bench
 模型密钥只填环境变量名，不写进 TOML。其余 `[model]` 参数直接交给 OpenHands `LLM`；
 模型名使用该 SDK / LiteLLM 的 provider/model 格式。
 
+## 对比工具组合
+
+默认使用注册中心工具。原 shell 配置继续保留，其任务、模型、with-skill 条件、重复次数
+和预算相同，便于需要时另行比较：
+
+- `config/skillsbench-shell-only.toml`：shell + 本地 think/finish。
+- `config/skillsbench.toml`：与 main.py 相同的四个 registry 工具 + 本地 think/finish。
+
+在项目根目录先看计划，再分别执行：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml
+```
+
+plan 输出应分别列出 3 和 6 个工具名称，各计划 1 个 trial。plan 通过公共 validate_tools
+检查名称格式和重复项，不导入工具、不验证原生实现、注册中心连接或容器依赖。
+增减工具直接编辑各自的 `[agent].tools`，新增实现方法见
+[公共工具加载说明](../harness/openhands/README.md)。
+
+工具名称由公共 tools.loader.load_tools 交给所选 harness 的适配代码；配置不再填写
+OpenHands 类路径。当前四个 registry 工具在 OpenHands、dsh 都有实现，容器 shell、文件
+工具及本地 think/finish 只有 OpenHands 实现，给 dsh 选择这些名称会明确报错。
+evaluation/runner.py 从配置中取出工具名称，显式传给 harness 的 tools 参数，
+其余迭代和超时预算沿用原接口；harness 不通过 settings 读取工具。
+
+按相同 task_id、condition、repeat 比较两个实验的 reward/passed、duration_sec、
+agent.usage 的 token/cost 和 tool_calls_by_name。summary 仍只在各实验内按技能条件
+汇总，不把两个实验自动合并。单次结果会受模型采样影响，需要重复时同步修改两份 repeats。
+两份配置都在 trial 容器执行，但操作能力不同：shell 可以执行任意命令，execute_resource
+只能运行当前任务允许的注册中心技能资源，不能把得分差异只归因于工具接口。
+后续修改其他实验参数时需保持两份配置一致。
+
 ## 执行与评分
 
 ```text
-load_tasks → prepare_task → DockerEnvironment.start → 注入所选技能
-           → OpenHands.arun → evaluator → 保存结果 → destroy
+dataset.loader → dataset.prepare → environment.factory → environment.start
+               → dataset.setup（可选）→ agent.runner → evaluator.function
+               → environment.destroy → 保存结果
 ```
 
-`prepare_task` 复用现有 `materialize_skillsbench_task`，把分离的索引还原到 trial/task；
+当前配置通过 `datasets.skillsbench` 提供数据集相关函数。其 `prepare_task` 复用现有
+`materialize_skillsbench_task`，把分离的索引还原到 trial/task；
 `verifiler_dir` 还原为 `verifier/`，只在副本里把旧 `environment:` 转成 `sandbox:`。
 数据源、oracle 和 verifier 原件不修改。实验保存索引与任务文本的 SHA-256、依赖版本和
 配置快照；环境输入和技能资源保留在各 trial 副本中。运行期间应保持源数据稳定，当前不对
 所有二进制输入做全量内容快照校验。
 
-两种条件都会通过 BenchFlow 的 `strip_task_bundled_skills` 清除副本的 `environment/skills`
+任务准备通过 BenchFlow 的 `strip_task_bundled_skills` 清除副本的 `environment/skills`
 及对应 Dockerfile COPY 行。`with-skill` 从索引的 `skills_dir` 复制完整资源并上传到容器
-`/skills`，向模型提供名称、描述及 SKILL.md 路径；正文由模型通过容器命令自行读取。
-`no-skill` 不上传也不公布这些内容。原始任务内容保持一致，技能目录只是可用能力清单，
+`/skills`，向模型提供名称、描述及 SKILL.md 路径；注册中心配置通过 load_skill 读取正文，
+shell 配置也可读取容器文件。当前只运行 with-skill；技能目录只是可用能力清单，
 不代表模型实际使用过技能。
 
 Agent 使用 OpenHands SDK 默认的 system prompt；runner 不覆盖提示词、替换模板或追加
 system message 后缀。任务正文及 with-skill 的技能清单作为用户消息输入。
-OpenHands 使用固定的 `evaluation_shell`、`think`、`finish` 工具。
-`evaluation_shell` 通过原事件循环调用当前 `env.execute`，全部文件读写、命令运行都发生在
-同一个任务容器；不使用注册中心远程执行接口。命令默认目录遵循镜像 WORKDIR，每次新建
-Bash 进程，不保留前一条命令的 shell 状态。完整工具输出写磁盘，仅传给模型的输出会截断。
-不加载宿主项目技能、用户技能或记忆。如果 SDK 自动增加了其他工具，会在首次模型请求前报错。
+评测流程将 `[agent].tools` 显式传给 OpenHands 的 tools 参数，再由公共 loader
+调用 OpenHands 适配代码加载本地实现，关闭 SDK 默认工具；think/finish 也由本项目
+实现。默认配置提供 search_skills、load_skill、load_resource、execute_resource、
+think 和 finish，加载的仍是 tools/openhands 中原有的注册中心工具。
+注册中心读取工具通过 HTTP 访问服务端；执行工具通过当前环境的 executor 下载资源、
+上传 worker 并在当前 trial 容器执行。资源执行共用原容器通道的预算、中断和输出限制。
+未设置工作目录时遵循镜像 WORKDIR，临时技能目录在执行后清理，产物应写到任务路径。
+容器中注入的 /skills 与注册中心仍是两个来源，需要事先准备相同技能。
+独立 main.py 没有传 environment 时仍使用原服务端 /execute_resource。
+可选的 shell/文件工具通过原事件循环调用当前 env.execute，在任务容器内操作；
+命令默认目录遵循镜像 WORKDIR，每次新建 Bash 进程。
+完整容器命令和资源执行结果写磁盘，仅传给模型的输出会截断；注册中心读取响应沿用原结构。
+配置与实际工具名称不符时会在首次模型请求前报错。
 
 OpenHands 执行逻辑位于 `harness/openhands/runner.py`，容器命令工具位于
-`tools/openhands/environment_shell.py`。`evaluation/openhands.py` 只将 `TrialContext`
-转换成任务正文、环境、输出目录等参数，再调用 harness 中的 `run_agent`。依赖方向为
-`evaluation → harness → tools/environment`；harness 不导入 evaluation，可以单独用于执行任务。
+`tools/openhands/terminal.py`，文件工具位于 `file_editor.py`，公共工具加载在
+`tools/loader.py`，SDK 注册留在 `tools/openhands/toolset.py`。通用评测流程将 `TrialContext`
+展开成任务正文、环境、输出目录、技能清单和 metadata，调用公共 `harness.runner.run_agent`，
+由它加载配置的执行函数与 recorder。模型请求、工具绑定与安全中断仍在具体 harness 内。
+harness 不接收 `TrialContext`、不导入 evaluation，可以单独用于执行任务。
+公共入口将配置的 recorder 创建在 `output_dir/trace`，并负责关闭；
+调用方显式提供的 recorder 实例仍由调用方关闭。省略 recorder 时直接运行 SDK，不录制标准 trace，
+原生 events/result 仍按各 harness 的输出逻辑保存。recorder 必须支持所选 harness 的原生录制接口。
+公共入口校验整体超时和名称列表；SDK 原生字段复用 SDK 校验，自定义约束在 execute 内少量检查，
+没有增加独立校验函数或参数规则表。
 JSON 写入与脱敏统一使用 `utils/json_io.py`。
 
-默认 evaluator 调用新增的 `env.verify()`，在容器销毁前执行原生 BenchFlow hardening 和
+`datasets.skillsbench:evaluate` 调用 `env.verify()`，在容器销毁前执行原生 BenchFlow hardening 和
 `Verifier.verify()`；沿用原任务 test.sh、reward.txt / reward.json、聚合及校验规则。
 reward 缺失、格式无效、API 或环境失败时保留 `reward: null` 和错误阶段；不能把这些情况
 冒充为模型得分 0。命令超时或整体 agent 超时会作为流程错误停止当前 trial。
@@ -103,6 +183,7 @@ logs/evaluation/<实验名>-<本地时间>-<随机ID>/
     task/                       还原后的环境、verifier、oracle 副本
     skills/                     with-skill 的完整技能副本
     task-info.json              来源与暴露的技能清单
+    agent/tools.json             实际工具名称、实现类和基础 function schema
     result.json                 reward、passed、结束原因、用量、耗时、错误阶段
     agent/events.jsonl          OpenHands 原生事件
     agent/trace/*.jsonl         harness-trace/1，含模型尝试与工具记录
@@ -123,23 +204,27 @@ JSON 产物使用 `schema_version = 1`。`events.jsonl` 保留 OpenHands 原生�
 指向标准 trace；旧实验没有此字段时，查看器读取 `agent/events.jsonl`。
 `status=completed` 表示流程完成，是否完成任务看 `passed` 与 `reward`；cleanup 失败会将
 status 标成 error，已取得的有效 reward 仍保留。`errors[].stage` 区分 prepare、environment、
-skills、agent、evaluate、cleanup。
+setup、agent、evaluate、cleanup。`setup` 是可选的数据集环境设置阶段，包括此处的技能上传。
 
 汇总按 condition 分组，同时给出 planned、recorded、scored、coverage 和错误数量。
 `mean_reward_scored` 只计算有效分数，`solve_rate_all` 使用计划数量为分母，
 `solve_rate_scored` 使用有效评分数量为分母。`paired_skill_effect` 只比较同一任务、同一次
-重复中两组都取得有效分数的配对，报告有效配对数和平均 reward 差。这里不计算 pass@k。
+重复中 `no-skill` / `with-skill` 都取得有效分数的配对，报告有效配对数和平均 reward 差。
+其他条件仍按名称独立汇总。这里不计算 pass@k。
 
 ## 更换数据集或评分函数
 
 组件直接用 `module:function` 引用，不需要增加注册表。也可在 Python 中将实际函数传给
-`run_evaluation(config, tasks=..., prepare_task=..., run_agent=..., evaluate=...)`。
+`run_evaluation(config, tasks=..., prepare_task=..., setup_environment=...,
+run_agent=..., evaluate=..., create_environment=...)`。
 
 | 函数 | 输入与返回值 |
 | --- | --- |
 | dataset.loader | `(index: Path, task_ids: list[str] \| None) -> list[Task]` |
 | dataset.prepare | `(task: Task, destination: Path, condition: str) -> PreparedTask` |
-| agent.runner | `async (context: TrialContext, model: dict, settings: dict) -> AgentResult` |
+| dataset.setup | `async (context: TrialContext) -> None`，可选 |
+| environment.factory | `(task_dir: Path, *, output_dir: Path, **options) -> Environment` |
+| agent.runner | `async execute(*, instruction, model, tools, environment, output_dir, workspace, timeout_sec, skill_catalog, recorder, **原生选项) -> AgentResult` |
 | evaluator.function | `async (context: TrialContext, agent: AgentResult) -> Score` |
 
 评估数据结构定义在 `evaluation/contracts.py`；通用执行结果 `AgentResult` 定义在
@@ -149,7 +234,22 @@ skills、agent、evaluate、cleanup。
 也可以在销毁前通过 `context.environment` 检查或下载产物。返回 `Score(reward=..., metrics=...)`，
 reward 统一归一到 [0, 1]；额外指标放在 metrics，runner 不解释其内部结构。
 比如更换成 LLM judge，只需要实现评分函数并修改 evaluator.function；原模型配置仍控制 solver。
-默认已暴露 `create_environment` Python 参数，其他环境需要实现其实际生命周期接口。
+`[agent]` 中的 runner、recorder 和 tools 会被取出，其余字段仍作为 settings 字典交给公共入口；
+公共入口取出并检查 timeout_sec，再把其余字段展开为 execute 的关键字参数。
+OpenHands 用普通函数签名拒绝未知选项，dsh 将其余原生选项交给 SDK 构造函数，
+不再重复维护 SDK 参数白名单。没有增加 settings 配置层。
+`[environment]` 中 factory 被取出，其余字段传给环境工厂。
+SkillsBench 的工厂保留镜像 WORKDIR（workdir=None）并清理每个 trial 的卷。
+其他环境需要实现现有 Environment 生命周期接口。
+
+更换 harness 只需选择其 runner 和支持的模型参数、运行选项、工具；更换数据集时配置
+loader、prepare、可选 setup 和对应 evaluator。环境工厂可单独选择，SkillsBench 的默认工厂
+只是为该数据集保留已有 Docker 行为，没有向评测循环写入 Docker 默认值。
+
+dsh 提供 `harness.dsh.runner:execute` 并返回同一种 AgentResult，独立入口同样调用公共 run_agent。
+本轮仅统一调用接口：dsh 的四个 registry 工具仍在服务端执行，不能访问 SkillsBench trial 容器；
+向该 runner 传入 environment 会明确报错，因此不能只改 runner 就认为 dsh 已能评测 SkillsBench。
+补齐 dsh 容器工具绑定属于后续单独的工作。
 
 ## 当前范围与手工检查
 

@@ -5,8 +5,8 @@ import os
 from litellm.types.utils import Usage
 from openhands.sdk.llm.utils.telemetry import Telemetry
 
-from agent_session_analyzer import OpenHandsRecorder
-from harness.openhands.runner import run_agent
+from harness.runner import run_agent
+from tools.loader import REGISTRY_TOOLS
 
 
 def _compatible_cache_buckets(usage) -> tuple[int, int]:
@@ -34,30 +34,27 @@ Telemetry._cache_buckets = staticmethod(_compatible_cache_buckets)
 registry_address = "http://127.0.0.1:5000"
 
 
-def run_task(task, exposed_skills: list[str] | None = None):
+def run_task(task, exposed_skills: list[str] | None = None, *,
+             tools=None):
     os.environ["EXPOSED_SKILLS"] = json.dumps(exposed_skills or [], ensure_ascii=False)
     os.environ.setdefault("SKILL_REGISTRY_URL", registry_address)
 
-    # Registry tool modules read their configuration during import.
-    from tools.openhands.register_tools import get_registry_tools
+    selected = [*REGISTRY_TOOLS, "think", "finish"] if tools is None else tools
 
-    with OpenHandsRecorder("./logs/harness/openhands") as recorder:
-        asyncio.run(
-            run_agent(
-                instruction=task,
-                model={
-                    "model": "deepseek/deepseek-flash",
-                    "api_key_env": "DEEPSEEK_API_KEY",
-                    "base_url": "https://api.deepseek.com",
-                },
-                settings={},
-                tools=get_registry_tools(),
-                workspace=os.getcwd(),
-                recorder=recorder,
-                timeout_sec=None,
-            )
-        )
-        print(recorder.last_path)
+    result = asyncio.run(run_agent(
+        runner="harness.openhands.runner:execute",
+        recorder="agent_session_analyzer:OpenHandsRecorder",
+        instruction=task,
+        model={
+            "model": "deepseek/deepseek-flash",
+            "api_key_env": "DEEPSEEK_API_KEY",
+            "base_url": "https://api.deepseek.com",
+        },
+        settings={}, tools=selected, workspace=os.getcwd(),
+        output_dir="./logs/harness/openhands", timeout_sec=None,
+    ))
+    print(result.trace_path)
+    return result
 
 
 def main():

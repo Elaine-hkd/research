@@ -28,35 +28,43 @@ Set-Location E:\lornd\research
 
 ```text
 harness 原生事件 → adapter / recorder → harness-trace/1 → 同一个时间线页面
-适配函数返回 AgentResult → Evaluation 保存 trial 结果 → 同一个 condition 对比页面
+公共 run_agent → harness.execute 返回 AgentResult → Evaluation 保存 trial 结果 → 同一个 condition 对比页面
 ```
 
 trace 可以单独存在，不必属于实验。实验通过 `trace_path` 关联 trace，不要求前端理解
 某个 SDK。展示层的目录兼容逻辑集中在 analyzer 的 `experiments.py`；不要向页面增加
 `if harness == ...` 的事件解析。后续 harness 优先直接录制标准 trace，原生日志导入用于兼容旧记录。
 
-## 实现 agent.runner 适配函数
+## 实现 harness 的 execute
 
-参考本项目完整的 [OpenHands 适配函数](openhands.py)，函数接口为：
+参考本项目的 [OpenHands runner](../harness/openhands/runner.py) 和
+[dsh runner](../harness/dsh/runner.py)，在 harness 内实现接口：
 
 ```python
-async def run_agent(context: TrialContext, model: dict, settings: dict) -> AgentResult:
+async def execute(*, instruction, model, tools=None, environment=None,
+                  output_dir=None, workspace=None, timeout_sec=900, skill_catalog=None,
+                  recorder=None, **native_options) -> AgentResult:
 ```
 
-函数由 `run_evaluation` 在每个 trial 中调用。它需要完成以下步骤：
+`run_evaluation` 在每个 trial 中调用公共 `harness.runner.run_agent`，由公共入口调用它，
+无需增加 evaluation/<harness>.py。公共入口按配置创建和关闭 recorder，传入的实例由调用方关闭。
+harness 不导入 evaluation，不接收 TrialContext。它需要完成以下步骤：
 
-1. 从 `context.task.instruction` 取得任务正文，从 `context.prepared.skill_catalog` 取得技能清单。
-   condition 已经决定是否注入技能；不要重新从宿主目录加载其他技能。
+1. 使用 instruction 作为任务正文，skill_catalog 作为技能清单。数据集已经决定是否注入技能；
+   不要重新从宿主目录加载其他技能。现有两个 runner 复用 harness.base.task_prompt 组合用户消息。
 2. 配置 harness 的模型。`model.api_key_env` 是环境变量名，真实密钥从本地环境取得。
-   模型配置来自当前 `[model]`，`settings` 来自 `[agent]`。
-3. 将 harness 的文件和命令工具绑定到 `context.environment`。
-   命令使用 `await context.environment.execute(...)`，上传、下载使用该环境已有接口。
-   不能让模型通过默认宿主 shell 操作评估数据。普通独立运行可由调用方提供自己的工具。
-4. 在 `context.output_dir` 内创建本次独立的 recorder，并运行 harness。
-   不同 trial 各建一个 recorder，不把两个 condition 写进同一个 session 文件。
-5. 返回 `AgentResult`，关闭自己创建的 recorder 和 conversation。
-   环境由 Evaluation 创建和销毁，适配函数不用重复管理。命令通道、录制或 SDK 失败应抛出异常，
-   不伪造成功或 0 reward。失败前可把部分 `AgentResult` 写入 `context.output_dir / "agent/result.json"`，
+   model 来自 `[model]`，tools 来自 `[agent].tools`，原生选项来自 `[agent]` 除 runner/recorder/tools/timeout_sec 外的字段。
+   公共入口提取并检查整体 timeout_sec，原生选项展开为 execute 的关键字参数；
+   可使用明确的函数签名，不要求新增校验函数或参数规则表。
+   各 SDK 的原生参数由各 runner 自己解释，不要求不同 SDK 接受同一组模型选项。
+3. 使用 tools 名称列表加载工具；有 environment 时，将命令和文件工具绑定到它。
+   不支持该环境时明确报错，不能忽略传入的 environment。普通独立运行可使用现有远程工具。
+4. 使用公共入口传入的 recorder 连接 SDK；recorder=None 时直接运行 SDK。
+   公共入口将 metadata 原样交给配置的记录器，在 `output_dir / "trace"` 内每次新建记录器。
+5. 返回 `AgentResult`，关闭自己创建的 conversation 或 runtime，等待执行线程结束。
+   recorder 的关闭由公共入口或提供它的调用方负责。
+   环境由 Evaluation 创建和销毁，harness 不用重复管理。命令通道、录制或 SDK 失败应抛出异常，
+   不伪造成功或 0 reward。失败前可把部分 `AgentResult` 写入 `output_dir / "result.json"`，
    Evaluation 会在失败收尾时读取它；当前 OpenHands harness 已这样处理。
 
 通用结果定义在 [harness/base.py](../harness/base.py)。推荐字段如下，未知数值使用 `None`：
@@ -85,8 +93,9 @@ result = AgentResult(
 缓存/推理 token 通常已经包含在输入/输出口径中，不再次相加；没有来源总数时不擅自计算 total。
 SDK 原始用量可另外保存在 `usage["tokens"]`，标准字段用于跨 harness 展示。
 
-现有 [OpenHands harness](../harness/openhands/runner.py) 已支持 `recorder=`，会在 finally 中填写累计用量与 trace 路径，
-因此 `evaluation/openhands.py` 只负责创建带 metadata 的 recorder 和转发参数。
+公共 run_agent 的 recorder 参数接受 module:class、已有实例或 None；省略时不录制标准 trace。
+配置的类需支持 `(log_dir, metadata=...)` 和上下文管理器，并匹配该 harness 的录制接口。
+现有 OpenHands execute 会在 finally 中填写累计用量与 trace 路径。
 其同步运行在工作线程上，容器操作仍调度到原来的 asyncio loop，不能用新的事件循环替代。
 recorder 通过本机 SDK 的 completion/retry 回调捕获模型尝试；SDK 升级后需要核对回调契约。
 本次只核对了 1.53.0 的源码，运行验证由使用者执行。
@@ -95,13 +104,16 @@ recorder 通过本机 SDK 的 completion/retry 回调捕获模型尝试；SDK �
 
 ```toml
 [agent]
-runner = "evaluation.openhands:run_agent"
+runner = "harness.openhands.runner:execute"
+recorder = "agent_session_analyzer:OpenHandsRecorder"
 ```
 
 其他 harness 改为其实际 `module:function`，不需要注册工厂或更改查看器。
-数据集准备与 evaluator 可继续复用，也可以使用 Evaluation 已有的函数接口替换。
-当前 SkillsBench 业务配置只接受 `no-skill` / `with-skill`；页面本身可展示任意 condition 名称。
-增加业务条件时还要修改配置校验、任务准备及注入逻辑，不能只改页面标签。
+数据集准备、可选的 dataset.setup、环境工厂及 evaluator 独立配置。
+通用评测配置与页面允许任意安全的 condition 名称；当前 datasets.skillsbench 的准备和注入
+只支持 `no-skill` / `with-skill`，增加其业务条件时需修改数据集模块。
+dsh runner 当前只有服务端 registry 工具，拒绝传入 trial environment；本轮统一了接口，
+没有新增容器工具绑定，不能直接替代当前 SkillsBench 配置的 OpenHands runner。
 
 ## 新 harness 如何录制标准 trace
 
@@ -143,7 +155,7 @@ step 的定义可能因 harness 而异，必须在录制信息中说明，不强
 
 ## 实验结果如何与 trace 关联
 
-Evaluation 自动生成以下结构，新适配函数不需要自己写 manifest 或 reward：
+Evaluation 自动生成以下结构，新 harness runner 不需要自己写 manifest 或 reward：
 
 ```text
 <experiment>/

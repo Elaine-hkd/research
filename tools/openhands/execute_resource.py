@@ -4,7 +4,7 @@ from typing import ClassVar
 from pydantic import Field, field_validator
 
 from openhands.sdk import Action, ToolDefinition
-from openhands.sdk.tool import Tool, ToolExecutor
+from openhands.sdk.tool import ToolExecutor
 
 from tools.openhands.utils import post_json
 from tools.openhands.observation import RegistryObservation
@@ -24,7 +24,7 @@ class ExecuteResourceAction(Action):
     timeout: float | None = Field(
         default=None,
         description=(
-            "Execution timeout in seconds; omit for server default"
+            "Execution timeout in seconds; omit for the execution backend default"
         ),
     )
 
@@ -52,9 +52,16 @@ class ExecuteResourceAction(Action):
 class ExecuteResourceExecutor(
     ToolExecutor[ExecuteResourceAction, RegistryObservation]
 ):
+    def __init__(self, channel=None):
+        self.channel = channel
+
     def __call__(
         self, action: ExecuteResourceAction, conversation=None
     ) -> RegistryObservation:
+        if self.channel is not None:
+            observation = self.channel.run_resource(action, conversation)
+            return RegistryObservation.from_text(observation.text, is_error=observation.is_error)
+
         body = {
             "skill_name": action.skill_name,
             "relative_path": action.relative_path,
@@ -67,6 +74,14 @@ class ExecuteResourceExecutor(
         )
         return RegistryObservation.from_text(result)
 
+    def interrupt(self) -> None:
+        if self.channel is not None:
+            self.channel.interrupt()
+
+    def close(self) -> None:
+        if self.channel is not None:
+            self.channel.close()
+
 
 class ExecuteResourceTool(
     ToolDefinition[ExecuteResourceAction, RegistryObservation]
@@ -74,17 +89,24 @@ class ExecuteResourceTool(
     name: ClassVar[str] = "execute_resource"
 
     @classmethod
-    def create(cls, conv_state, **params):
+    def create(cls, conv_state=None, *, executor=None, **params):
+        execution_description = "Execution takes place in the environment managed by the registry server."
+        if executor is not None:
+            execution_description = (
+                "Resources are downloaded from the registry and executed in this task's "
+                "environment. Relative input/output paths use its working directory; "
+                "write persistent outputs outside the temporary skill directory."
+            )
         return [
             cls(
                 description=(
                     "Execute a script or executable resource belonging "
                     "to a skill. Pass command-line arguments as separate "
-                    "array elements. Execution takes place in the "
-                    "environment managed by the registry server."
+                    "array elements. "
+                    + execution_description
                 ),
                 action_type=ExecuteResourceAction,
                 observation_type=RegistryObservation,
-                executor=ExecuteResourceExecutor(),
+                executor=ExecuteResourceExecutor(executor),
             )
         ]

@@ -1,5 +1,6 @@
 """Adapt the split SkillsBench index without changing source data."""
 
+import asyncio
 import hashlib
 import json
 import math
@@ -9,7 +10,53 @@ import shutil
 
 import yaml
 
-from .contracts import PreparedTask, Task
+from evaluation.contracts import AgentResult, PreparedTask, Score, Task, TrialContext
+
+
+def create_environment(task_dir: Path, *, output_dir: Path, **options):
+    """Preserve SkillsBench image WORKDIR and per-trial Docker isolation."""
+    from environment import DockerEnvironment
+
+    return DockerEnvironment(task_dir, output_dir=output_dir, workdir=None,
+                             cleanup_volumes=True, **options)
+
+
+async def setup_environment(context: TrialContext) -> None:
+    """Inject only the skills selected by this dataset's preparation policy."""
+    registry = context.environment.executor.registry
+    if registry is not None:
+        skill_names = frozenset(skill["name"] for skill in context.prepared.skill_catalog)
+        if registry.allowed is not None and not skill_names.issubset(registry.allowed):
+            raise ValueError("environment.allowed_skills excludes skills required by this task")
+        registry.allowed = skill_names
+    if context.condition == "with-skill":
+        if context.prepared.skills_dir is None:
+            raise ValueError("with-skill task preparation did not supply skills_dir")
+        if registry is not None:
+            # Missing required registry data is a setup failure, not a solver
+            # score of zero. Do not expose another task's skills as a fallback.
+            for skill_name in sorted(registry.allowed):
+                await asyncio.to_thread(registry.load_skill, skill_name)
+        exists = await context.environment.execute(["test", "!", "-e", "/skills"])
+        if not exists.success:
+            raise ValueError("Task image already contains /skills; refuse to merge skill sources")
+        await context.environment.upload(context.prepared.skills_dir, "/skills")
+    elif context.condition == "no-skill":
+        if context.prepared.skills_dir is not None or context.prepared.skill_catalog:
+            raise ValueError("no-skill task preparation exposed skills")
+    else:
+        raise ValueError(f"Unsupported SkillsBench condition: {context.condition}")
+
+
+async def evaluate(context: TrialContext, agent: AgentResult) -> Score:
+    from environment import DockerEnvironment
+
+    if not isinstance(context.environment, DockerEnvironment):
+        raise TypeError("The native SkillsBench verifier requires DockerEnvironment")
+    rewards = await context.environment.verify()
+    if "reward" not in rewards:
+        raise ValueError("Verifier rewards must contain an aggregate 'reward'")
+    return Score(reward=rewards["reward"], metrics=rewards)
 
 
 def _document(path: Path) -> tuple[dict, str]:

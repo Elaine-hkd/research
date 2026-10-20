@@ -1,7 +1,7 @@
 name = "skillsbench-openhands"
 # Paths are relative to this TOML file. Each invocation gets a unique run folder.
 output_dir = "../logs/evaluation"
-conditions = ["no-skill", "with-skill"]
+conditions = ["with-skill"]
 repeats = 1
 pass_threshold = 1.0
 
@@ -9,8 +9,9 @@ pass_threshold = 1.0
 index = "../data/task/skillsbench.json"
 # Delete this line to select the complete index.
 task_ids = ["3d-scan-calc"]
-loader = "evaluation.skillsbench:load_tasks"
-prepare = "evaluation.skillsbench:prepare_task"
+loader = "datasets.skillsbench:load_tasks"
+prepare = "datasets.skillsbench:prepare_task"
+setup = "datasets.skillsbench:setup_environment"
 
 [model]
 model = "deepseek/deepseek-flash"
@@ -24,15 +25,30 @@ num_retries = 0
 # reasoning_effort = "high"
 
 [agent]
-runner = "evaluation.openhands:run_agent"
+runner = "harness.openhands.runner:execute"
+recorder = "agent_session_analyzer:OpenHandsRecorder"
 max_iterations = 100
 tool_timeout_sec = 120
 max_output_chars = 20000
+# Same existing registry tool interfaces and control tools as main.py.
+# Registry reads use environment.registry_url and this task's skill names.
+# execute_resource downloads the selected resource and runs it in the trial.
+tools = [
+    "search_skills",
+    "load_skill",
+    "load_resource",
+    "execute_resource",
+    "terminal",
+    "read_file",
+    "write_file"
+]
 # Omit timeout_sec to honor each task's agent.timeout_sec.
 
 [evaluator]
-function = "evaluation.evaluators:skillsbench_verifier"
+function = "datasets.skillsbench:evaluate"
 
 [environment]
+factory = "datasets.skillsbench:create_environment"
+registry_url = "http://127.0.0.1:5000"
 startup_timeout = 1800
 cleanup_timeout = 180

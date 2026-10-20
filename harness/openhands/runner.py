@@ -1,41 +1,60 @@
-"""Run one OpenHands task with container tools or caller-supplied tools."""
+"""Run one OpenHands task with explicitly selected local tool implementations."""
 
 import asyncio
+from collections import Counter
 from dataclasses import asdict
-import json
+import math
 import os
 from pathlib import Path
 import time
-from uuid import uuid4
 
 from environment.base import Environment
-from harness.base import AgentResult
+from harness.base import AgentResult, task_prompt
 from utils.json_io import append_jsonl, redact, write_json
 
 
-async def run_agent(*, instruction: str, model: dict, settings: dict,
+async def execute(*, instruction: str, model: dict,
                     environment: Environment | None = None, tools=None,
                     output_dir: str | Path | None = None,
                     workspace: str | Path | None = None,
                     timeout_sec: float | None = 900,
                     skill_catalog: list[dict[str, str]] | None = None,
-                    recorder=None) -> AgentResult:
+                    recorder=None, max_iterations: int = 500,
+                    tool_timeout_sec: float = 120,
+                    max_output_chars: int = 20000) -> AgentResult:
     """Execute a task without depending on a dataset or evaluation context.
 
-    Pass either environment (bind a shell) or tools (e.g. the registry tool set).
+    tools is an explicit list of shared tool names. Pass environment to bind
+    environment tools to the task container. Standalone callers may also pass
+    existing SDK Tool specs. Native run options are ordinary keyword arguments.
     The caller owns environment and recorder lifetimes. A recorder uses its
     synchronous run API in a worker thread; the default path uses SDK arun().
     output_dir enables native event/result artifacts; timeout_sec=None disables
-    the overall agent deadline. settings may override timeout_sec.
+    the overall agent deadline. The common entry point resolves its override.
     System prompts are supplied by the SDK defaults.
     """
     from openhands.sdk import Agent, Conversation, LLM
-    from openhands.sdk.tool import Tool, register_tool
+    from openhands.sdk.tool import Tool
+    from tools.loader import ENVIRONMENT_TOOLS, load_tools
 
-    if (environment is None) == (tools is None):
-        raise ValueError("Pass either environment or tools, but not both")
+    # SDK conversation arguments and our shell limits lack these value checks.
+    for name, value in (("max_iterations", max_iterations), ("max_output_chars", max_output_chars)):
+        if type(value) is not int or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    if (isinstance(tool_timeout_sec, bool) or not isinstance(tool_timeout_sec, (int, float))
+            or not math.isfinite(tool_timeout_sec) or tool_timeout_sec <= 0):
+        raise ValueError("tool_timeout_sec must be a positive finite number")
+
+    if environment is None and tools is None:
+        raise ValueError("Pass environment or explicit tools")
     if environment is not None and output_dir is None:
         raise ValueError("Container runs require output_dir for their isolated workspace")
+    selected = list(ENVIRONMENT_TOOLS) if tools is None else tools
+    if not isinstance(selected, (list, tuple)):
+        raise TypeError("tools must be a list of tool names or SDK Tool specs")
+    by_name = all(isinstance(tool, str) for tool in selected)
+    if not by_name and (environment is not None or not all(isinstance(tool, Tool) for tool in selected)):
+        raise TypeError("Container tools require tool names; standalone tools may use SDK Tool specs")
 
     model_kwargs = dict(model)
     key_name = model_kwargs.pop("api_key_env")
@@ -46,36 +65,48 @@ async def run_agent(*, instruction: str, model: dict, settings: dict,
     agent_dir = Path(output_dir) if output_dir is not None else None
     if agent_dir is not None:
         agent_dir.mkdir(parents=True, exist_ok=True)
-    budget = settings.get("timeout_sec", timeout_sec)
+    budget = timeout_sec
     executor = None
-    agent_kwargs = {"llm": llm, "tools": tools, "tool_concurrency_limit": 1}
     if environment is not None:
-        from tools.openhands.environment_shell import EnvironmentShellTool, ShellExecutor
+        from tools.openhands.terminal import ShellExecutor
 
         executor = ShellExecutor(
             environment, asyncio.get_running_loop(),
             deadline=time.monotonic() + budget if budget is not None else float("inf"),
-            timeout=settings["tool_timeout_sec"], output_chars=settings["max_output_chars"],
+            timeout=tool_timeout_sec, output_chars=max_output_chars,
             log_path=agent_dir / "tool-calls.jsonl",
         )
-        # Specs remain serializable; only executor holds the live environment.
-        binding_name = "evaluation_shell_" + uuid4().hex
-        register_tool(binding_name, EnvironmentShellTool.create(executor=executor)[0])
-        agent_kwargs["tools"] = [Tool(name=binding_name)]
-        agent_kwargs["include_default_tools"] = ["FinishTool", "ThinkTool"]
-    agent = Agent(**agent_kwargs)
+    expected_names = set(selected) if by_name else None
+    tool_specs = load_tools("openhands", selected, executor=executor) if by_name else list(selected)
+    agent = Agent(llm=llm, tools=tool_specs, tool_concurrency_limit=1, include_default_tools=[])
     result = AgentResult(final_response="", finish_reason="error")
     error_codes = []
+    calls_by_tool = Counter()
+    tool_snapshot = None
 
-    def check_container_tools():
-        if environment is not None:
-            unexpected = set(agent.tools_map) - {"evaluation_shell", "finish", "think"}
-            if unexpected:
-                raise ValueError(f"OpenHands added tools outside the task container: {sorted(unexpected)}")
+    def check_tools():
+        nonlocal tool_snapshot
+        actual = set(agent.tools_map)
+        if expected_names is not None and actual != expected_names:
+            raise ValueError(
+                f"OpenHands tool list differs from configuration: "
+                f"extra={sorted(actual - expected_names)}, missing={sorted(expected_names - actual)}"
+            )
+        if tool_snapshot is None:
+            tool_snapshot = {
+                "configured": selected if by_name else None,
+                "tools": [{
+                    "name": tool.name,
+                    "implementation": f"{type(tool).__module__}:{type(tool).__name__}",
+                    "schema": tool.to_openai_tool(),
+                } for tool in agent.tools_map.values()],
+            }
+            if agent_dir is not None:
+                write_json(agent_dir / "tools.json", redact(tool_snapshot, key))
 
     def on_event(event):
         if type(event).__name__ == "SystemPromptEvent":
-            check_container_tools()
+            check_tools()
         raw = event.model_dump(mode="json")
         # SDK events are useful for analysis; redact the injected credential even
         # when a provider embeds it in an exception message.
@@ -88,6 +119,7 @@ async def run_agent(*, instruction: str, model: dict, settings: dict,
             error_codes.append(raw["code"])
         if type(event).__name__ == "ActionEvent":
             result.tool_calls += 1
+            calls_by_tool[raw.get("tool_name", "unknown")] += 1
         action = raw.get("action") or {}
         if raw.get("tool_name") == "finish" and isinstance(action.get("message"), str):
             result.final_response = action["message"]
@@ -106,25 +138,19 @@ async def run_agent(*, instruction: str, model: dict, settings: dict,
             workspace = Path.cwd()
     conversation_kwargs = {
         "agent": agent, "workspace": workspace, "callbacks": [on_event],
-        "max_iteration_per_run": settings.get("max_iterations", 500),
+        "max_iteration_per_run": max_iterations,
     }
+    prompt = task_prompt(instruction, skill_catalog)
     if recorder is None:
         conversation_kwargs["visualizer"] = None
         conversation = Conversation(**conversation_kwargs)
     else:
         conversation = recorder.create_conversation(**conversation_kwargs)
-    prompt = instruction
-    if skill_catalog:
-        prompt += (
-            "\n\nAvailable task skills (read SKILL.md before using a skill):\n"
-            + json.dumps([{key: skill[key] for key in ("name", "description", "path")}
-                          for skill in skill_catalog], ensure_ascii=False, indent=2)
-        )
     running = None
     try:
         if recorder is None:
             conversation.send_message(prompt)
-            check_container_tools()
+            check_tools()
             running = asyncio.create_task(conversation.arun())
         else:
             # The recorder owns send_message and telemetry/retry hooks. Calling
@@ -163,11 +189,14 @@ async def run_agent(*, instruction: str, model: dict, settings: dict,
             "cache_write_tokens": tokens.get("cache_write_tokens") if tokens else None,
             "reasoning_tokens": tokens.get("reasoning_tokens") if tokens else None,
             "cost_usd": metrics.accumulated_cost if metrics.costs else None,
+            "tool_names": list(agent.tools_map),
+            "tool_calls_by_name": dict(calls_by_tool),
         }
         if recorder is not None and recorder.last_path is not None:
             result.trace_path = str(recorder.last_path)
         if executor is not None:
-            result.usage["shell_calls"] = executor.calls
+            result.usage["shell_calls"] = executor.calls_by_tool["terminal"]
+            result.usage["environment_calls"] = executor.calls
         try:
             if agent_dir is not None:
                 write_json(agent_dir / "result.json", redact(asdict(result), key))

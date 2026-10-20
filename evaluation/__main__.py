@@ -28,6 +28,11 @@ def main() -> int:
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
             "output_dir": config["output_dir"],
             "agent_runner": config["agent"]["runner"], "evaluator": config["evaluator"]["function"],
+            "agent_recorder": config["agent"].get("recorder"),
+            "tools": config["agent"].get("tools"),
+            "dataset_loader": dataset["loader"], "dataset_prepare": dataset["prepare"],
+            "dataset_setup": dataset.get("setup"),
+            "environment_factory": config["environment"]["factory"],
         }, ensure_ascii=False, indent=2))
         return 0
     # Match the existing harness convention; environment values take precedence.

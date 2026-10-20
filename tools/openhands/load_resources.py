@@ -3,7 +3,7 @@ from typing import ClassVar
 from pydantic import Field
 
 from openhands.sdk import Action, ToolDefinition
-from openhands.sdk.tool import Tool, ToolExecutor
+from openhands.sdk.tool import ToolExecutor
 
 from tools.openhands.utils import get_json
 from tools.openhands.observation import RegistryObservation
@@ -19,6 +19,9 @@ class LoadResourceAction(Action):
 class LoadResourceExecutor(
     ToolExecutor[LoadResourceAction, RegistryObservation]
 ):
+    def __init__(self, registry=None):
+        self.registry = registry
+
     def __call__(
         self, action: LoadResourceAction, conversation=None
     ) -> RegistryObservation:
@@ -28,6 +31,7 @@ class LoadResourceExecutor(
                 "skill_name": action.name,
                 "relative_path": action.relative_path,
             },
+            registry=self.registry,
         )
         return RegistryObservation.from_text(result)
 
@@ -38,12 +42,12 @@ class LoadResourceTool(
     name: ClassVar[str] = "load_resource"
 
     @classmethod
-    def create(cls, conv_state, **params):
+    def create(cls, conv_state=None, *, registry=None, **params):
         return [
             cls(
                 description="Read a resource belonging to a skill.",
                 action_type=LoadResourceAction,
                 observation_type=RegistryObservation,
-                executor=LoadResourceExecutor(),
+                executor=LoadResourceExecutor(registry),
             )
         ]

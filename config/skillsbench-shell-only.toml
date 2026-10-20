@@ -1,0 +1,48 @@
+name = "skillsbench-openhands-shell-only"
+# Paths are relative to this TOML file. Each invocation gets a unique run folder.
+output_dir = "../logs/evaluation"
+conditions = ["with-skill"]
+repeats = 1
+pass_threshold = 1.0
+
+[dataset]
+index = "../data/task/skillsbench.json"
+# Delete this line to select the complete index.
+task_ids = ["3d-scan-calc"]
+loader = "datasets.skillsbench:load_tasks"
+prepare = "datasets.skillsbench:prepare_task"
+setup = "datasets.skillsbench:setup_environment"
+
+[model]
+model = "deepseek/deepseek-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 120
+num_retries = 0
+# Optional SDK fields, when supported by the selected model:
+# temperature = 0.0
+# max_output_tokens = 8192
+# reasoning_effort = "high"
+
+[agent]
+runner = "harness.openhands.runner:execute"
+recorder = "agent_session_analyzer:OpenHandsRecorder"
+max_iterations = 100
+tool_timeout_sec = 120
+max_output_chars = 20000
+# Shared tool names; the selected harness loads its existing implementations.
+# Shell baseline; compare with skillsbench.toml using the same experiment settings.
+tools = [
+    "terminal",
+    "think",
+    "finish",
+]
+# Omit timeout_sec to honor each task's agent.timeout_sec.
+
+[evaluator]
+function = "datasets.skillsbench:evaluate"
+
+[environment]
+factory = "datasets.skillsbench:create_environment"
+startup_timeout = 1800
+cleanup_timeout = 180
