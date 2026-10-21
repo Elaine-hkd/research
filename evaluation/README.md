@@ -202,13 +202,13 @@ reward 缺失、格式无效、API 或环境失败时保留 `reward: null` 和�
 logs/evaluation/<实验名>-<本地时间>-<随机ID>/
   manifest.json                 配置、任务来源、文本哈希、依赖版本、计划数量
   results.jsonl                 每个 trial 结束就追加一条
-  summary.json                  每个 trial 结束更新汇总
+  summary.json                  每个 trial 结束更新评分及阶段耗时汇总
   trials/<任务>__<条件>__<次数>/
     task/                       还原后的环境、verifier、oracle 副本
     skills/                     with-skill 的完整技能副本
     task-info.json              来源与暴露的技能清单
     agent/tools.json             实际工具名称、实现类和基础 function schema
-    result.json                 reward、passed、结束原因、用量、耗时、错误阶段
+    result.json                 各阶段结束更新耗时，trial 结束补齐评分、用量和错误
     agent/events.jsonl          OpenHands 原生事件
     agent/trace/*.jsonl         harness-trace/1，含模型尝试与工具记录
     agent/tool-calls.jsonl      容器命令与未截断的 stdout/stderr
@@ -229,6 +229,48 @@ JSON 产物使用 `schema_version = 1`。`events.jsonl` 保留 OpenHands 原生�
 `status=completed` 表示流程完成，是否完成任务看 `passed` 与 `reward`；cleanup 失败会将
 status 标成 error，已取得的有效 reward 仍保留。`errors[].stage` 区分 prepare、environment、
 setup、agent、evaluate、cleanup。`setup` 是可选的数据集环境设置阶段，包括此处的技能上传。
+
+每个 trial 的 `stage_durations_sec` 分别记录以下阶段的秒数，使用单调时钟测量，包含异步等待：
+
+| 字段 | 计时范围 |
+| --- | --- |
+| `prepare` | `dataset.prepare`、返回值检查与 task-info.json 写入 |
+| `environment` | 环境工厂创建、`environment.start()`，包括镜像构建、容器启动和就绪检查 |
+| `setup` | 可选的 `dataset.setup`，例如读取注册中心、上传技能 |
+| `agent` | 公共 harness 入口，包括 recorder、智能体执行和该入口内的收尾 |
+| `evaluate` | 评分函数及评分返回值检查，包括原生 verifier |
+| `cleanup` | `environment.destroy()`，包括容器、卷等资源回收 |
+
+例如 `"stage_durations_sec": {"prepare": 0.8, "environment": 180.2, "setup": 1.1,
+"agent": 95.4, "evaluate": 6.3, "cleanup": 2.0}`。这些阶段互不重叠；
+原有 `duration_sec` 继续表示整个 trial 的耗时，还包含阶段间结果写入、异常记录等调度开销。
+未执行的阶段和未配置的 setup 为 `null`，实际测得零则保留零。
+失败或正常取消的阶段仍记录终止前的用时，后续未运行的阶段保持 `null`。
+
+每个阶段退出时原子更新该 trial 的 `result.json`，可以在长实验中读取已完成阶段的耗时；
+运行中 `status` 为 `running`，trial 收尾后更新为最终状态并追加到实验的 `results.jsonl`。
+强制结束进程或断电时，只能保留最后一次已写入的阶段记录，正在执行阶段的最终用时无法保证。
+`summary.json` 仍在每个 trial 结束时更新，不包含尚未结束的 trial。
+
+`summary.json` 顶层及 `groups.<condition>` 中的 `stage_durations_sec` 均按阶段给出
+`count`、`total`、`mean`、`max`；除 count 外单位均为秒。
+统计包含成功和失败 trial 中实际测得的阶段，count 是测得该阶段用时的 trial 数；
+没有测量值时 count 为 0，其余为 `null`。旧实验没有此字段，不会自动补算。
+按 total 查看整轮实验主要耗时，按 mean/max 查看单个 trial 的典型和最长阶段耗时。
+
+新实验完成至少一个 trial 后，可在项目根目录用 PowerShell 查看最近实验的阶段统计：
+
+```powershell
+Set-Location E:\lornd\research
+$experiment = Get-ChildItem .\logs\evaluation -Directory |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$summary = Get-Content -LiteralPath (Join-Path $experiment.FullName 'summary.json') -Raw |
+    ConvertFrom-Json
+$summary.stage_durations_sec | Format-List
+```
+
+预期列出六个阶段及 count/total/mean/max；此命令只读取实验文件，不启动 Docker 或调用模型。
+未执行测试，由用户自行验证。
 
 汇总按 condition 分组，同时给出 planned、recorded、scored、coverage 和错误数量。
 `mean_reward_scored` 只计算有效分数，`solve_rate_all` 使用计划数量为分母，

@@ -6,6 +6,24 @@ from statistics import mean
 from utils.json_io import append_jsonl, redact, write_json
 
 
+def _summarize_stage_durations(rows: list[dict]) -> dict:
+    durations_by_stage = {}
+    for row in rows:
+        for stage, duration in row.get("stage_durations_sec", {}).items():
+            durations = durations_by_stage.setdefault(stage, [])
+            if duration is not None:
+                durations.append(duration)
+    return {
+        stage: {
+            "count": len(durations),
+            "total": sum(durations) if durations else None,
+            "mean": mean(durations) if durations else None,
+            "max": max(durations) if durations else None,
+        }
+        for stage, durations in durations_by_stage.items()
+    }
+
+
 def summarize(rows: list[dict], conditions: list[str], tasks: int, repeats: int) -> dict:
     groups = {}
     expected = tasks * repeats
@@ -24,6 +42,7 @@ def summarize(rows: list[dict], conditions: list[str], tasks: int, repeats: int)
             "solve_rate_all": passed / expected,
             "solve_rate_scored": passed / len(scored) if scored else None,
             "mean_reward_scored": mean(row["reward"] for row in scored) if scored else None,
+            "stage_durations_sec": _summarize_stage_durations(selected),
         }
     paired = {}
     for row in rows:
@@ -33,6 +52,7 @@ def summarize(rows: list[dict], conditions: list[str], tasks: int, repeats: int)
               if "with-skill" in pair and "no-skill" in pair]
     return {
         "schema_version": 1,
+        "stage_durations_sec": _summarize_stage_durations(rows),
         "groups": groups,
         "paired_skill_effect": {
             "scored_pairs": len(deltas),

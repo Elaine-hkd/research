@@ -1,6 +1,7 @@
 """Sequential trials with independent environments and durable per-trial results."""
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -23,6 +24,17 @@ from .dataset import load_tasks
 
 def _local_time() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+@contextmanager
+def _record_stage(row: dict, stage: str, result_path: Path, secret: str):
+    """Persist measured wall time even when a stage fails or is cancelled."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        row["stage_durations_sec"][stage] = time.monotonic() - started
+        write_json(result_path, redact(row, secret))
 
 
 def _versions() -> dict:
@@ -121,6 +133,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                     trial_id = f"{task.id}__{condition}__{repeat:03d}"
                     trial_dir = output / "trials" / trial_id
                     trial_dir.mkdir(parents=True)
+                    result_path = trial_dir / "result.json"
                     started = time.monotonic()
                     row = {
                         "schema_version": 1, "trial_id": trial_id,
@@ -129,65 +142,73 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         "dataset_index": dataset["index"],
                         "agent_runner": manifest["components"]["agent"],
                         "evaluator": manifest["components"]["evaluator"],
-                        "status": "error", "reward": None, "passed": None,
+                        "status": "running", "reward": None, "passed": None,
                         "metrics": {}, "agent": None, "errors": [],
+                        "stage_durations_sec": dict.fromkeys((
+                            "prepare", "environment", "setup", "agent", "evaluate", "cleanup",
+                        )),
                     }
                     stage, environment = "prepare", None
                     print(f"[{len(rows) + 1}/{total}] {trial_id}: prepare", flush=True)
                     try:
                         # 准备任务
-                        prepared = prepare_task(task, trial_dir / "task", condition)
-                        if not isinstance(prepared, PreparedTask):
-                            raise TypeError("Dataset preparer must return evaluation.PreparedTask")
-                        write_json(trial_dir / "task-info.json", {
-                            "task_id": task.id, "source": task.source,
-                            "skill_catalog": prepared.skill_catalog,
-                        })
+                        with _record_stage(row, stage, result_path, secret):
+                            prepared = prepare_task(task, trial_dir / "task", condition)
+                            if not isinstance(prepared, PreparedTask):
+                                raise TypeError("Dataset preparer must return evaluation.PreparedTask")
+                            write_json(trial_dir / "task-info.json", {
+                                "task_id": task.id, "source": task.source,
+                                "skill_catalog": prepared.skill_catalog,
+                            })
 
                         # 初始化环境
                         stage = "environment"
-                        environment = create_environment(
-                            prepared.task_dir, output_dir=trial_dir,
-                            **environment_options,
-                        )
-                        row["environment_id"] = getattr(environment, "run_id", None)
-                        await environment.start()
-                        context = TrialContext(task, prepared, environment, trial_dir, condition, repeat)
+                        with _record_stage(row, stage, result_path, secret):
+                            environment = create_environment(
+                                prepared.task_dir, output_dir=trial_dir,
+                                **environment_options,
+                            )
+                            row["environment_id"] = getattr(environment, "run_id", None)
+                            await environment.start()
+                            context = TrialContext(task, prepared, environment, trial_dir, condition, repeat)
                         
                         # 设置环境
                         stage = "setup"
                         if setup_environment is not None:
-                            await setup_environment(context)
+                            with _record_stage(row, stage, result_path, secret):
+                                await setup_environment(context)
 
                         # 智能体运行
                         stage = "agent"
                         print(f"  {trial_id}: agent", flush=True)
-                        agent_result = await run_harness(
-                            runner=run_agent,
-                            recorder=recorder,
-                            instruction=task.instruction,
-                            model=config["model"],
-                            tools=tools,
-                            settings=dict(agent_options),
-                            environment=environment,
-                            output_dir=trial_dir / "agent",
-                            timeout_sec=task.agent_timeout_sec,
-                            skill_catalog=prepared.skill_catalog,
-                            metadata={
-                                "experiment_id": output.name, "experiment_name": output.name,
-                                "trial_id": trial_id, "task_id": task.id,
-                                "condition": condition, "repeat": repeat,
-                            },
-                        )
-                        row["agent"] = asdict(agent_result)
+                        with _record_stage(row, stage, result_path, secret):
+                            agent_result = await run_harness(
+                                runner=run_agent,
+                                recorder=recorder,
+                                instruction=task.instruction,
+                                model=config["model"],
+                                tools=tools,
+                                settings=dict(agent_options),
+                                environment=environment,
+                                output_dir=trial_dir / "agent",
+                                timeout_sec=task.agent_timeout_sec,
+                                skill_catalog=prepared.skill_catalog,
+                                metadata={
+                                    "experiment_id": output.name, "experiment_name": output.name,
+                                    "trial_id": trial_id, "task_id": task.id,
+                                    "condition": condition, "repeat": repeat,
+                                },
+                            )
+                            row["agent"] = asdict(agent_result)
 
                         #评估任务结果
                         stage = "evaluate"
                         print(f"  {trial_id}: evaluate", flush=True)
-                        score = await evaluate(context, agent_result)
-                        _score(score)
-                        row.update(reward=float(score.reward), metrics=score.metrics,
-                                   passed=score.reward >= config["pass_threshold"], status="completed")
+                        with _record_stage(row, stage, result_path, secret):
+                            score = await evaluate(context, agent_result)
+                            _score(score)
+                            row.update(reward=float(score.reward), metrics=score.metrics,
+                                       passed=score.reward >= config["pass_threshold"])
                     except BaseException as exc:
                         row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
                         row["errors"].append({"stage": stage, "type": type(exc).__name__, "message": redact(str(exc), secret)})
@@ -196,12 +217,19 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                             raise
                     finally:
                         # 清理环境
+                        cleanup_interrupt = None
                         if environment is not None:
                             try:
-                                await environment.destroy()
-                            except Exception as exc:
-                                row["status"] = "error"
+                                with _record_stage(row, "cleanup", result_path, secret):
+                                    await environment.destroy()
+                            except BaseException as exc:
+                                row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
                                 row["errors"].append({"stage": "cleanup", "type": type(exc).__name__, "message": redact(str(exc), secret)})
+                                if not isinstance(exc, Exception):
+                                    # Save the trial before propagating cancellation from cleanup.
+                                    cleanup_interrupt = exc
+                        if row["status"] == "running":
+                            row["status"] = "completed"
                         partial_agent = trial_dir / "agent" / "result.json"
                         if row["agent"] is None and partial_agent.is_file():
                             row["agent"] = json.loads(partial_agent.read_text(encoding="utf-8"))
@@ -216,11 +244,13 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
                         # Reward remains useful if only cleanup failed; status exposes it.
                         safe_row = redact(row, secret)
-                        write_json(trial_dir / "result.json", safe_row)
+                        write_json(result_path, safe_row)
                         append_jsonl(output / "results.jsonl", safe_row)
                         rows.append(safe_row)
                         write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
                         print(f"  {trial_id}: {row['status']}, reward={row['reward']}", flush=True)
+                        if cleanup_interrupt is not None:
+                            raise cleanup_interrupt
     finally:
         # 保存结果
         manifest["finished_at"] = _local_time()
