@@ -130,7 +130,14 @@ Ubuntu Ports 使用对应的 `ubuntu-ports` 镜像；使用 HTTP 避免最小镜
 APT 签名校验保持启用。源地址按[清华 Ubuntu](https://mirrors.tuna.tsinghua.edu.cn/help/ubuntu/)与
 [Debian](https://mirrors.tuna.tsinghua.edu.cn/help/debian/)镜像说明配置。
 非 Ubuntu/Debian 系统打印跳过信息；Ubuntu/Debian 在首条 RUN 时必须已使用 root，否则明确报错。
-不修改 `data/` 原件或已有任务副本，不更改镜像基础版本，也不配置 pip、npm 或 Docker Hub 镜像。
+同一段 Dockerfile 解析还会在每个非 `scratch` 阶段的 FROM 后注入
+`ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`，让该阶段后续的 `pip install`、
+`python -m pip install` 以及镜像运行期间的 pip 默认使用清华 PyPI 源。
+使用 ENV 不要求基础镜像预装 Python/pip，也不需要 root；HTTPS 地址按
+[清华 PyPI 镜像说明](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)配置，保留证书校验。
+任务显式指定的 `-i` / `--index-url`（如 PyTorch CPU 专用源）、直接下载 URL，以及后续重新设置的
+`PIP_INDEX_URL` 仍优先；此处不配置 uv，也不删除第三方 extra-index-url。
+不修改 `data/` 原件或已有任务副本，不更改镜像基础版本，也不配置 npm 或 Docker Hub 镜像。
 现有 `materialize_skillsbench_task(...)` 调用无需调整；只有重新生成的副本才包含此操作。
 
 只检查生成结果、不启动 Docker（项目已有 Python 环境与依赖即可；执行目录 `E:\lornd\research`）：
@@ -149,9 +156,12 @@ print((task / "environment/Dockerfile").read_text(encoding="utf-8"))
 '@ | .\.venv\Scripts\python.exe -
 ```
 
-预期 `# research: APT mirror (TUNA)` 及其 RUN 位于原始 `RUN apt-get update ...` 之前。
+预期每个非 `scratch` 阶段的 FROM 后出现 `# research: pip mirror (TUNA)` 及上述 ENV，
+`# research: APT mirror (TUNA)` 及其 RUN 位于原始 `RUN apt-get update ...` 之前。
 构建时应看到 `research: APT mirror configured for ubuntu (TUNA)`，APT 下载日志使用
-`mirrors.tuna.tsinghua.edu.cn`。重点检查 Ubuntu 24.04、Python slim/Debian 以及添加桌面后的构建。
+`mirrors.tuna.tsinghua.edu.cn`；普通 pip 安装应显示
+`Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple`。
+重点检查 Ubuntu 24.04、Python slim/Debian 以及添加桌面后的构建。
 本次仅检查代码与 diff，未执行上述命令、测试或 Docker 构建。
 
 ## 给任务副本添加完整桌面

@@ -6,6 +6,8 @@ import re
 import shutil
 
 
+_PIP_MIRROR_MARKER = "# research: pip mirror (TUNA)"
+_PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 _APT_MIRROR_MARKER = "# research: APT mirror (TUNA)"
 _APT_MIRROR_COMMAND = r"""
 if [ ! -f /etc/os-release ]; then
@@ -36,16 +38,19 @@ echo "research: APT mirror configured for $ID (TUNA)"
 """.strip()
 
 
-def _inject_apt_mirror(dockerfile: Path) -> None:
-    """Prepare each build stage before its first RUN, after any initial USER."""
+def _inject_package_mirrors(dockerfile: Path) -> None:
+    """Set pip after FROM and prepare APT before each stage's first RUN."""
     text = dockerfile.read_text(encoding="utf-8-sig")
-    if _APT_MIRROR_MARKER in text:
+    inject_pip = _PIP_MIRROR_MARKER not in text
+    inject_apt = _APT_MIRROR_MARKER not in text
+    if not inject_pip and not inject_apt:
         return
     lines = text.splitlines(keepends=True)
-    block = f"\n{_APT_MIRROR_MARKER}\nRUN " + json.dumps(
+    pip_block = f"\n{_PIP_MIRROR_MARKER}\nENV PIP_INDEX_URL={_PIP_INDEX_URL}\n"
+    apt_block = f"\n{_APT_MIRROR_MARKER}\nRUN " + json.dumps(
         ["/bin/sh", "-ec", _APT_MIRROR_COMMAND],
     ) + "\n"
-    insertions = set()
+    insertions = {}
     pending_stage = False
     escape = "\\"
     i = 0
@@ -72,9 +77,11 @@ def _inject_apt_mirror(dockerfile: Path) -> None:
         if keyword == "FROM":
             arguments = "".join(lines[start:i]).replace(escape + "\n", " ").split()[1:]
             image = next(part for part in arguments if not part.startswith("--"))
-            pending_stage = image.lower() != "scratch"
+            pending_stage = image.lower() != "scratch" and inject_apt
+            if image.lower() != "scratch" and inject_pip:
+                insertions[i] = pip_block
         elif keyword == "RUN" and pending_stage:
-            insertions.add(start)
+            insertions[start] = insertions.get(start, "") + apt_block
             pending_stage = False
         # A heredoc may contain FROM/RUN as data, including embedded Python imports.
         if keyword in {"RUN", "COPY"}:
@@ -90,12 +97,11 @@ def _inject_apt_mirror(dockerfile: Path) -> None:
                     raise ValueError(f"Unclosed Dockerfile heredoc {delimiter!r}: {dockerfile}")
     # A final stage without RUN can still receive the desktop installer afterwards.
     if pending_stage:
-        insertions.add(len(lines))
+        insertions[len(lines)] = insertions.get(len(lines), "") + apt_block
     if insertions:
-        rewritten = "".join((block if index in insertions else "") + line
+        rewritten = "".join(insertions.get(index, "") + line
                             for index, line in enumerate(lines))
-        if len(lines) in insertions:
-            rewritten += block
+        rewritten += insertions.get(len(lines), "")
         dockerfile.write_text(rewritten, encoding="utf-8", newline="\n")
 
 
@@ -130,7 +136,7 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     Caller owns the staging directory. No environment is started here.
     Absolute index paths are preserved; relative paths resolve beside the index.
     Only the staged task.md renames environment to sandbox for BenchFlow 0.7.8.
-    Staged Dockerfile* files switch official Ubuntu/Debian APT sources to TUNA.
+    Staged Dockerfile* files use TUNA for pip and official Ubuntu/Debian APT sources.
     """
     index_path = Path(index_path).resolve(strict=True)
     rows = json.loads(index_path.read_text(encoding="utf-8-sig"))["tasks"]
@@ -176,5 +182,5 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
             shutil.copy2(source, target)
     for dockerfile in sorted((destination / "environment").rglob("Dockerfile*")):
         if dockerfile.is_file():
-            _inject_apt_mirror(dockerfile)
+            _inject_package_mirrors(dockerfile)
     return destination
