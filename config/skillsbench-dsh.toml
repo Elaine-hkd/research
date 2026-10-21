@@ -1,6 +1,7 @@
+# Default experiment name; override per run with --name "my-experiment" (Chinese is supported).
 name = "skillsbench-dsh"
-# Paths are relative to this TOML file; every invocation gets its own run folder.
-output_dir = "../logs/evaluation"
+# Paths are relative to this TOML file; results use benchmark/harness/model/name.
+output_dir = "../logs/exp"
 conditions = ["with-skill"]
 repeats = 3
 pass_threshold = 1.0

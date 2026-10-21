@@ -5,19 +5,23 @@ import asyncio
 import json
 from pathlib import Path
 
-from .config import load_config
+from .config import experiment_directory, load_config
 from .dataset import load_tasks
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate an agent on isolated task environments")
     parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
+    parser.add_argument("--name", help="Experiment name; overrides config.name and supports Chinese")
     parser.add_argument("--plan", action="store_true", help="Read config and tasks only; no model calls or Docker")
     parser.add_argument("--task", nargs="+", help="Override dataset.task_ids")
     args = parser.parse_args()
     config = load_config(args.config)
+    if args.name is not None:
+        config["name"] = args.name
     if args.task is not None:
         config["dataset"]["task_ids"] = args.task
+    output = experiment_directory(config)
     dataset = config["dataset"]
     
     tasks = load_tasks(dataset)
@@ -29,6 +33,7 @@ def main() -> int:
             "sample_size": dataset.get("sample_size"), "seed": dataset.get("seed"),
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
             "output_dir": config["output_dir"],
+            "experiment_dir": str(output),
             "agent_runner": config["agent"]["runner"], "evaluator": config["evaluator"]["function"],
             "agent_recorder": config["agent"].get("recorder"),
             "tools": config["agent"].get("tools"),

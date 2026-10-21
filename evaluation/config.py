@@ -14,6 +14,32 @@ def function_reference(value, name: str) -> None:
         raise ValueError(f"{name} must be a module:function reference")
 
 
+def _directory_component(value, name: str) -> str:
+    """Keep readable names while rejecting traversal and invalid Windows names."""
+    if (not isinstance(value, str) or not value or value != value.strip()
+            or value in {".", ".."} or value.endswith(".")
+            or re.search(r'[<>:"/\\|?*\x00-\x1f]', value)):
+        raise ValueError(f"{name} must be a non-empty directory name without path separators, "
+                         "invalid filename characters, or surrounding spaces/trailing dots")
+    if re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?", value, re.IGNORECASE):
+        raise ValueError(f"{name} cannot use a reserved Windows device name: {value!r}")
+    return value
+
+
+def experiment_directory(config: dict) -> Path:
+    """Resolve output_dir/benchmark/harness/model/name without creating files."""
+    name = _directory_component(config["name"], "Experiment name")
+    dataset_module = config["dataset"]["loader"].partition(":")[0]
+    benchmark = _directory_component(dataset_module.rsplit(".", 1)[-1], "Benchmark directory")
+    runner_module = config["agent"]["runner"].partition(":")[0]
+    harness = _directory_component(
+        runner_module.removesuffix(".runner").rsplit(".", 1)[-1], "Harness directory",
+    )
+    model = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", config["model"]["model"])
+    model = _directory_component(model, "Model directory")
+    return Path(config["output_dir"]) / benchmark / harness / model / name
+
+
 def load_config(path: Path) -> dict:
     path = Path(path).resolve(strict=True)
     config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
@@ -21,9 +47,7 @@ def load_config(path: Path) -> dict:
                "dataset", "model", "agent", "evaluator", "environment"}
     if extra := config.keys() - allowed:
         raise ValueError(f"Unknown experiment settings: {sorted(extra)}")
-    name = config["name"]
-    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
-        raise ValueError("Experiment name must use letters, digits, '.', '_' or '-'")
+    _directory_component(config["name"], "Experiment name")
     config["output_dir"] = str((path.parent / config.get("output_dir", "../logs/evaluation")).resolve())
     config.setdefault("repeats", 1)
     if type(config["repeats"]) is not int or config["repeats"] < 1:

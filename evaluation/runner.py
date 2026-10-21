@@ -17,7 +17,7 @@ from uuid import uuid4
 from harness.runner import run_agent as run_harness
 
 from .artifacts import append_jsonl, redact, summarize, write_json
-from .config import load_function
+from .config import experiment_directory, load_function
 from .contracts import PreparedTask, Score, TrialContext
 from .dataset import load_tasks
 
@@ -68,6 +68,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     No evaluation objects are passed to harnesses or their recorders.
     Evaluator: async (context, agent_result) -> Score. Environments are external factories.
     """
+    output = experiment_directory(config)
     # 加载数据集和任务
     dataset = config["dataset"]
     if tasks is None:
@@ -101,15 +102,21 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
         raise ValueError(f"Set model credential environment variable {key_name} before running")
 
     # 设置输出目录
-    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    output = Path(config["output_dir"]) / f"{config['name']}-{stamp}-{uuid4().hex[:8]}"
-    output.mkdir(parents=True)
+    try:
+        output.mkdir(parents=True)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"Experiment directory already exists: {output}. "
+            "Choose a new experiment name with --name or config.name."
+        ) from exc
+    experiment_id = uuid4().hex
     
     conditions, repeats = config["conditions"], config["repeats"]
     total = len(tasks) * len(conditions) * repeats
     
     manifest = {
         "schema_version": 1, "started_at": _local_time(), "config": config,
+        "experiment_id": experiment_id, "experiment_name": config["name"],
         "versions": _versions(), "planned_trials": total,
         "tasks": [asdict(task) for task in tasks],
         "components": {
@@ -194,7 +201,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                                 timeout_sec=task.agent_timeout_sec,
                                 skill_catalog=prepared.skill_catalog,
                                 metadata={
-                                    "experiment_id": output.name, "experiment_name": output.name,
+                                    "experiment_id": experiment_id, "experiment_name": config["name"],
                                     "trial_id": trial_id, "task_id": task.id,
                                     "condition": condition, "repeat": repeat,
                                 },

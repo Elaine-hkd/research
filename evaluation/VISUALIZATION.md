@@ -166,6 +166,13 @@ Evaluation 自动生成以下结构，新 harness runner 不需要自己写 mani
     agent/trace/<session>.jsonl  标准 trace，实际名称由 recorder 决定
 ```
 
+新实验的 `<experiment>` 位于 `logs/evaluation/<benchmark>/<harness>/<model>/<实验名称>/`，
+由命令行 `--name` 或配置顶层 `name` 指定最后一级名称。查看器递归发现 manifest，不要求
+固定目录深度，所以无需调整扫描代码；选择 `logs/evaluation` 或任意一级父目录后刷新即可。
+旧时间命名目录可以与新结构共存。实验 ID 在查看器中按完整目录路径区分，显示名取最后一级
+目录；不同 benchmark、harness 或 model 下的同名实验不会合并，页面已有 harness/model
+标签和同名实验的目录说明。目录层次不会自动变成页面的导航层次，页面仍为“实验 → 任务 → repeat”。
+
 `results.jsonl` 行的 `trace_path` 相对 `trials/<trial_id>/`，例如
 `agent/trace/abc.jsonl`。目录搬迁时，只要整体移动实验目录，相对引用仍然有效。
 没有该字段的旧实验才按固定的 `agent/events.jsonl` 寻找 trace。

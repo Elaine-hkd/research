@@ -56,6 +56,7 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 | 要改变的内容 | 配置项 |
 | --- | --- |
+| 本次实验名称 | 顶层 `name`，或单次命令的 `--name` |
 | 模型及服务地址 | `[model] model`、`base_url`、`api_key_env` |
 | 模型采样与输出预算 | `[model] temperature`、`max_output_tokens`、`reasoning_effort` 等 OpenHands LLM 参数 |
 | 数据集及任务集合 | `[dataset] index`、`task_ids`、`loader`、`prepare` |
@@ -71,6 +72,19 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 | 评分方式 | `[evaluator] function` |
 | 环境构造与参数 | `[environment] factory` 及其余构造参数 |
 | 容器工具读取的注册中心 | `[environment] registry_url` |
+
+每次运行可使用同一份配置并指定实验名，支持中文和内部空格：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "清华源耗时对比" --plan
+```
+
+`--plan` 输出 `name` 与完整的 `experiment_dir`，只预览，不创建目录、启动 Docker 或调用模型。
+移除 `--plan` 才开始实际实验，可能构建镜像并产生模型调用费用。
+没有传 `--name` 时使用 TOML 顶层的 `name`；它现在表示实验目录最后一级的名称。
+相同 benchmark/harness/model 下同名目录已存在时直接报错，不覆盖结果，也不自动增加时间后缀。
+实验名不能包含路径分隔符、Windows 非法文件名字符、首尾空格或末尾句点；拒绝 `.`、`..`
+和 Windows 保留设备名。原有配置中的默认 name 保留，需要另一次实验时更换名称。
 
 删除 `dataset.task_ids` 一行选择完整索引。也可单次覆盖任务集合：
 
@@ -199,7 +213,7 @@ reward 缺失、格式无效、API 或环境失败时保留 `reward: null` 和�
 ## 结果目录
 
 ```text
-logs/evaluation/<实验名>-<本地时间>-<随机ID>/
+logs/evaluation/<benchmark>/<harness>/<model>/<实验名称>/
   manifest.json                 配置、任务来源、文本哈希、依赖版本、计划数量
   results.jsonl                 每个 trial 结束就追加一条
   summary.json                  每个 trial 结束更新评分及阶段耗时汇总
@@ -218,10 +232,23 @@ logs/evaluation/<实验名>-<本地时间>-<随机ID>/
     error.txt                   失败时的异常链
 ```
 
-实验目录时间使用运行机器的本地时区，格式为 `YYYYMMDD-HHMMSS`，例如
-`skillsbench-openhands-20261016-164236-a1b2c3d4`。`started_at` / `finished_at`
-使用带时区偏移的本地 ISO 时间，例如 `2026-10-16T16:42:36+08:00`。
-已有实验目录和记录保留原时间格式。
+目录由 `evaluation.config.experiment_directory(config)` 统一计算，命令行预览和实际运行使用
+同一份实现。benchmark 取 `dataset.loader` 模块名的最后一段（`datasets.skillsbench` →
+`skillsbench`）；harness 取 `agent.runner` 模块去掉末尾 `.runner` 后的最后一段
+（`harness.openhands.runner` → `openhands`）。model 使用配置中的完整 `model.model`，
+其中 `/`、`:` 等 Windows 非法文件名字符替换成 `-`；原始模型名仍完整保留在配置快照和结果中。
+上面的命令对应：
+
+```text
+logs/evaluation/skillsbench/openhands/deepseek-deepseek-flash/清华源耗时对比/
+```
+
+`manifest.json` 另存独立的 `experiment_id` 和用户指定的 `experiment_name`，recorder metadata
+使用相同信息，因此不同模型或 harness 下相同的实验名仍有不同 ID。
+`started_at` / `finished_at` 继续使用带时区偏移的本地 ISO 时间；已有实验目录和记录不迁移。
+可视化查看器递归扫描 `manifest.json`，不依赖时间格式或固定目录深度，因此无需修改读取逻辑；
+选择 `logs/evaluation` 后刷新即可同时读取新旧目录。页面仍按“实验 → 任务 → repeat”浏览，
+并提供 harness/model 标签与筛选；同名实验用完整目录区分。
 
 JSON 产物使用 `schema_version = 1`。`events.jsonl` 保留 OpenHands 原生事件；
 `agent/trace/` 使用 `harness-trace/1`。trial 结果中的 `trace_path` 相对该 trial 目录，
@@ -262,9 +289,10 @@ setup、agent、evaluate、cleanup。`setup` 是可选的数据集环境设置�
 
 ```powershell
 Set-Location E:\lornd\research
-$experiment = Get-ChildItem .\logs\evaluation -Directory |
+$summaryFile = Get-ChildItem .\logs\evaluation -Filter summary.json -File -Recurse |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName 'manifest.json') -PathType Leaf } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$summary = Get-Content -LiteralPath (Join-Path $experiment.FullName 'summary.json') -Raw |
+$summary = Get-Content -LiteralPath $summaryFile.FullName -Raw |
     ConvertFrom-Json
 $summary.stage_durations_sec | Format-List
 ```
