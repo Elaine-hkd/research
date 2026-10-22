@@ -49,49 +49,69 @@ def _run_resource(payload):
     env = os.environ.copy()
     env.update(payload["env"])
     env["PYTHONIOENCODING"] = "utf-8"
-    return run_command(command, cwd, env, payload["timeout"])
+    return run_command(command, cwd, env, payload["timeout"],
+                       control_path=payload.get("control_path"))
 
 
-def run_command(command, cwd, env, timeout):
+def _kill_process_tree(process):
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=10, check=False, shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            if process.poll() is None:
+                process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        process.kill()
+
+
+def run_command(command, cwd, env, timeout, *, control_path=None, merge_stderr=False):
     started = time.monotonic()
+    cancelled = Path(control_path + ".cancelled") if control_path is not None else None
+    if cancelled is not None and cancelled.exists():
+        raise InterruptedError("Command cancelled before startup")
     process = subprocess.Popen(
         command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE, shell=False,
         start_new_session=(os.name != "nt"),
     )
     timed_out = False
     try:
+        if control_path is not None:
+            pending_control = Path(control_path + ".tmp")
+            pending_control.write_text(str(process.pid), encoding="ascii")
+            pending_control.replace(control_path)
+            # A disconnect may race with Popen and publishing its process group.
+            if cancelled.exists():
+                raise InterruptedError("Command cancelled during startup")
         stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        # Stop the process tree rather than only its immediate interpreter.
-        if os.name == "nt":
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=10, check=False, shell=False,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-            if process.poll() is None:
-                process.kill()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+    except BaseException as exc:
+        timed_out = isinstance(exc, subprocess.TimeoutExpired)
+        _kill_process_tree(process)
         try:
             stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired as cleanup_exc:
             # A detached descendant may still hold a pipe. Do not wait forever.
-            stdout, stderr = exc.output or b"", exc.stderr or b""
+            stdout, stderr = cleanup_exc.output or b"", cleanup_exc.stderr or b""
             process.stdout.close()
-            process.stderr.close()
+            if process.stderr is not None:
+                process.stderr.close()
+            process.wait(timeout=5)
+        if not timed_out:
+            raise
     return {
         "exit_code": None if timed_out else process.returncode,
         "stdout": stdout.decode("utf-8", errors="replace"),
-        "stderr": stderr.decode("utf-8", errors="replace"),
+        "stderr": (stderr or b"").decode("utf-8", errors="replace"),
         "timed_out": timed_out,
         "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
     }
@@ -104,7 +124,14 @@ def main():
                 payload = json.load(stream)
         else:
             payload = json.load(sys.stdin)
-        result = {"result": run_resource(payload)}
+        if payload.get("operation") == "command":
+            command_result = run_command(
+                payload["argv"], payload["workdir"], os.environ.copy(), payload["timeout"],
+                control_path=payload["control_path"], merge_stderr=True,
+            )
+        else:
+            command_result = run_resource(payload)
+        result = {"result": command_result}
     except Exception as exc:
         result = {"error": type(exc).__name__ + ": " + str(exc)}
     print(json.dumps(result, ensure_ascii=True))

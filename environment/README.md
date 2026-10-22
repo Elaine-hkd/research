@@ -84,12 +84,18 @@ asyncio.run(main())
 Docker 适配以已检查源码的 benchflow==0.7.8 为准，仅支持其 Linux Docker 后端。需要 Docker CLI、Compose v2、运行中的 Docker 引擎。
 容器 Python 3.9+，宿主 Python 3.12+；技能依赖由任务镜像提供。注册中心请求只发生在宿主。
 原始命令通道将 stderr 合并至 stdout，但技能脚本由监督进程分别捕获 stdout/stderr。
+Docker 原始命令与技能脚本复用容器内监督进程，每次命令在独立进程组中执行；
+达到执行时限后杀死该组，并限时回收输出和退出状态。原始命令超时仍抛异常，不改变工具上限。
+宿主 Docker CLI 另留 transport_grace（默认30秒）供回传和清理；超时或取消时，
+Windows 使用 taskkill /T /F 回收本次 CLI 及 Compose 插件，其他宿主回收该 CLI 进程组。
+所有退出与输出等待都有清理边界；连接中断时还会通过独立调用停止容器内对应命令组。
+停止失败会附加在原始异常中，环境仍标记 failed 并由 destroy 回收容器。
 Docker 传输异常后标记 failed，拒绝继续执行；通过 destroy 回收容器，不假定结束宿主等待就终止了远端脚本。
 startup_timeout 默认900秒、ready_timeout 30秒、cleanup_timeout 180秒。
 `docker compose build` 默认使用 `--progress plain`，输出实时写入宿主 stderr，
 同时保留完整输出用于构建失败的异常；无需修改 DockerEnvironment 的调用方式。
 启动超时或取消时会终止本次构建的 Docker CLI，并继续执行环境清理。
-该输出适配只修改本次 sandbox 实例的 BenchFlow 0.7.8 内部方法，不修改安装包或其他环境实例。
+该进程适配只修改本次 sandbox 实例的 BenchFlow 0.7.8 内部方法，不修改安装包或其他环境实例。
 镜像、宿主日志、任务 staging 和持久卷保留；持久卷的实验重置策略由 eval 管理。
 日志按 BenchFlow 原生规则写入 cwd/jobs/environment/，不修改进程 cwd。
 

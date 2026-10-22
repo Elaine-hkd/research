@@ -4,8 +4,11 @@ import asyncio
 import codecs
 from importlib.metadata import PackageNotFoundError, version
 import math
+import os
 from pathlib import Path, PurePosixPath
 import shlex
+import signal
+import subprocess
 import sys
 from typing import Sequence
 from uuid import uuid4
@@ -25,24 +28,63 @@ def _remote_path(value: str) -> str:
     return value
 
 
-async def _stream_compose_build(sandbox, command, *, check=True, timeout_sec=None):
+async def _kill_cli_tree(process):
+    """Stop this CLI and its plugin children without an unbounded pipe wait."""
+    tree_error = None
+    if os.name == "nt" and process.returncode is None:
+        # Kill the tree before its root: docker.exe launches the Compose plugin.
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill", "/PID", str(process.pid), "/T", "/F",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        try:
+            await asyncio.wait_for(killer.wait(), 5)
+        finally:
+            if killer.returncode is None:
+                killer.kill()
+                await asyncio.wait_for(killer.wait(), 5)
+        if killer.returncode != 0 and process.returncode is None:
+            tree_error = RuntimeError(f"taskkill failed with exit code {killer.returncode}")
+    elif os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    await asyncio.wait_for(process.wait(), 5)
+    if tree_error is not None:
+        raise tree_error
+
+
+async def _run_compose_command(sandbox, command, *, check=True, timeout_sec=None):
     from benchflow.sandbox._base import ExecResult
     from benchflow.sandbox.docker import _sanitize_docker_compose_project_name
 
     full_command = [
-        "docker", "compose", "--progress", "plain",
+        "docker", "compose",
         "--project-name", _sanitize_docker_compose_project_name(sandbox.session_id),
         "--project-directory", str(sandbox.environment_dir.resolve()),
     ]
     for path in sandbox._docker_compose_paths:
         full_command.extend(["-f", str(path.resolve())])
+    streaming = bool(command and command[0] == "build")
+    if streaming:
+        full_command[2:2] = ["--progress", "plain"]
     full_command.extend(command)
 
-    print(f"[Docker build] Building {sandbox.environment_name}", file=sys.stderr, flush=True)
+    if streaming:
+        print(f"[Docker build] Building {sandbox.environment_name}", file=sys.stderr, flush=True)
     process = await asyncio.create_subprocess_exec(
         *full_command, env=sandbox._docker_compose_env(),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
+           else {"start_new_session": True}),
     )
     output = bytearray()
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -51,39 +93,36 @@ async def _stream_compose_build(sandbox, command, *, check=True, timeout_sec=Non
         # Chunks avoid readline's length limit; decoding preserves split UTF-8 characters.
         while chunk := await process.stdout.read(4096):
             output.extend(chunk)
-            print(decoder.decode(chunk), end="", file=sys.stderr, flush=True)
-        print(decoder.decode(b"", final=True), end="", file=sys.stderr, flush=True)
+            if streaming:
+                print(decoder.decode(chunk), end="", file=sys.stderr, flush=True)
+        if streaming:
+            print(decoder.decode(b"", final=True), end="", file=sys.stderr, flush=True)
         await process.wait()
 
     reader = asyncio.create_task(collect_output())
     try:
-        # Keep draining the pipe while stopping the CLI after a timeout or Ctrl+C.
+        # Shield preserves partial output while timeout cleanup stops the tree.
         await asyncio.wait_for(asyncio.shield(reader), timeout_sec)
     except BaseException as exc:
         try:
-            if process.returncode is None:
-                try:
-                    process.terminate()
-                except ProcessLookupError:
-                    pass  # The CLI exited between the returncode check and terminate.
-            try:
-                await asyncio.wait_for(asyncio.shield(reader), 5)
-            except TimeoutError:
-                if process.returncode is None:
-                    try:
-                        process.kill()
-                    except ProcessLookupError:
-                        pass
-                await asyncio.wait_for(asyncio.shield(reader), 5)
+            await _kill_cli_tree(process)
+            await asyncio.wait_for(asyncio.shield(reader), 5)
         except BaseException as cleanup_exc:
+            exc.add_note(f"Docker CLI cleanup also failed: {cleanup_exc}")
+        finally:
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)
-            exc.add_note(f"Docker build process cleanup also failed: {cleanup_exc}")
+            # asyncio.Process has no public close method. Close inherited pipes
+            # even if an escaped plugin still owns a handle on Windows.
+            process._transport.close()
         if isinstance(exc, TimeoutError):
-            raise RuntimeError(
-                f"Docker compose build timed out after {timeout_sec} seconds. "
+            error = RuntimeError(
+                f"Docker compose command timed out after {timeout_sec} seconds. "
                 f"Output:\n{output.decode('utf-8', errors='replace')}"
-            ) from exc
+            )
+            for note in getattr(exc, "__notes__", ()):
+                error.add_note(note)
+            raise error from exc
         raise
 
     result = ExecResult(
@@ -120,17 +159,14 @@ def _make_runtime(task_dir: Path, run_id: str, output_dir: Path | None = None):
             preserve_agent_network=False, environment_manifest=None,
         )
         runtime = RuntimeEnvironment(inner=inner, task_path=task_dir, sandbox="docker")
-    original_command = runtime.inner._run_docker_compose_command
 
     async def run_compose(command, check=True, timeout_sec=None):
-        if command and command[0] == "build":
-            return await _stream_compose_build(
-                runtime.inner, command, check=check, timeout_sec=timeout_sec,
-            )
-        return await original_command(command, check=check, timeout_sec=timeout_sec)
+        return await _run_compose_command(
+            runtime.inner, command, check=check, timeout_sec=timeout_sec,
+        )
 
-    # BenchFlow 0.7.8 has no build-output callback. Hook only this sandbox,
-    # preserving its build retries and the captured output of exec/down/up.
+    # Hook only this sandbox: keep build streaming and bound CLI-tree cleanup
+    # for exec, transfers and teardown without changing the installed package.
     runtime.inner._run_docker_compose_command = run_compose
     return runtime
 
@@ -219,15 +255,19 @@ class BenchFlowBackend:
         async with self._lock:
             self._require_running()
             try:
-                result = await self._runtime.exec(
-                    shlex.join(argv), cwd=cwd, timeout_sec=math.ceil(timeout), service=service,
-                )
+                return await self._execute_command(argv, cwd=cwd, timeout=timeout, service=service)
             except BaseException:
                 # A broken/timed-out exec may leave the command running remotely.
                 # Disallow reuse until the caller has destroyed this environment.
                 self.state = "failed"
                 raise
-            return CommandResult(result.return_code, result.stdout or "", result.stderr or "")
+
+    async def _execute_command(self, argv, *, cwd, timeout, service):
+        """Execute under the lifecycle lock; DockerEnvironment adds supervision."""
+        result = await self._runtime.exec(
+            shlex.join(argv), cwd=cwd, timeout_sec=math.ceil(timeout), service=service,
+        )
+        return CommandResult(result.return_code, result.stdout or "", result.stderr or "")
 
     async def upload(self, source: str | Path, destination: str) -> None:
         source = Path(source).resolve(strict=True)
