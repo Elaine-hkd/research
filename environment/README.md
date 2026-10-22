@@ -113,6 +113,8 @@ SKILL.md 保存正文，不包含注册中心剥离的 frontmatter；未列出�
 需要保留的输出写入持久 workdir 或指定绝对路径，不写入临时技能目录。
 allowed_skills=None 允许全部技能，[] 禁用全部；registry_url 可省略，此时只能使用原始环境命令和文件操作。
 registry_timeout 是单次 HTTP 超时；default_timeout 是脚本超时（默认300秒）；Docker transport_grace 默认30秒。
+`.py`、`.sh` 分别使用已配置的 Python、Bash；`.mjs` 使用目标环境 PATH 中的 `node` 启动，
+无需脚本执行权限或 shebang。目标环境需自行提供 Node.js；不会自动安装或切换到宿主执行。
 `execute_resource(..., total_timeout=...)` 可让下载与脚本执行共用预算；共享工具层传入当前有效工具预算，
 下载占用的时间从脚本时限中扣除。下载预算耗尽时不启动脚本，并返回可恢复超时。
 容器传输和退出清理保留独立时限，因此调用的墙钟耗时可以超过执行预算；不会由同一计时器抢先取消清理。

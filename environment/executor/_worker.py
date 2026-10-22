@@ -41,6 +41,8 @@ def _run_resource(payload):
         command = [payload["python_executable"], str(resource)]
     elif suffix == ".sh":
         command = [payload["bash_executable"], str(resource)]
+    elif suffix == ".mjs":
+        command = ["node", str(resource)]
     elif os.name == "nt" and suffix in {".bat", ".cmd"}:
         raise ValueError("Windows batch files are unsupported; use a Python script")
     else:
