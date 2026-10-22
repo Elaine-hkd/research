@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import Counter
-from dataclasses import asdict
 import json
 import math
 import os
@@ -11,6 +10,7 @@ import time
 from uuid import uuid4
 
 from harness.base import AgentResult, task_prompt
+from harness.diagnostics import RunDiagnostics
 from harness.dsh.console import DshConsole
 from tools.loader import REGISTRY_TOOLS, load_tools, validate_tools
 from utils.json_io import append_jsonl, redact, write_json
@@ -87,6 +87,8 @@ async def execute(*, instruction: str, model: dict,
     def sanitize(value):
         value = redact(value, key)
         return redact(value, bridge.token) if bridge is not None else value
+
+    diagnostics = RunDiagnostics(agent_dir, sanitize=sanitize)
 
     def on_event(notification):
         nonlocal tool_snapshot, validation_error
@@ -186,31 +188,32 @@ async def execute(*, instruction: str, model: dict,
             raise RuntimeError(f"dsh stopped with {result.finish_reason}: {sanitize(reason)}")
         if selected and tool_snapshot is None:
             raise RuntimeError("dsh did not report the configured model-visible tools")
-        return result
+    except BaseException as exc:
+        # Persist the upstream error before close() makes run() report stdout closed.
+        diagnostics.remember(exc, "run")
     finally:
         if starting is not None:
-            await asyncio.gather(starting, return_exceptions=True)
-        try:
-            # Join container work before releasing the evaluator-owned environment.
-            try:
-                if bridge is not None:
-                    await bridge.close()
-            finally:
-                # SDK close wakes run() and reaps its runtime subprocess.
-                if harness is not None:
-                    await asyncio.to_thread(harness.close)
-        finally:
-            if failing is not None:
+            with diagnostics.stage("initialize.join"):
+                await asyncio.gather(starting, return_exceptions=True)
+        with diagnostics.stage("bridge.close"):
+            if bridge is not None:
+                await bridge.close()
+        with diagnostics.stage("harness.close"):
+            # SDK close wakes run() and reaps its runtime subprocess.
+            if harness is not None:
+                await asyncio.to_thread(harness.close)
+        if failing is not None:
+            with diagnostics.stage("bridge.wait_failed.join"):
                 failing.cancel()
                 await asyncio.gather(failing, return_exceptions=True)
-            if running is not None:
+        if running is not None:
+            with diagnostics.stage("run.join"):
                 await asyncio.gather(running, return_exceptions=True)
+        with diagnostics.stage("trace_metrics"):
             if recorder is not None and recorder.last_path is not None:
-                result.trace_path = str(recorder.last_path)
                 result.tool_calls, result.usage = _trace_metrics(Path(recorder.last_path))
-            result.usage["tool_names"] = selected
-            if operations is not None:
-                result.usage["shell_calls"] = operations.calls_by_tool["terminal"]
-                result.usage["environment_calls"] = operations.calls
-            if agent_dir is not None:
-                write_json(agent_dir / "result.json", sanitize(asdict(result)))
+        result.usage["tool_names"] = selected
+        if operations is not None:
+            result.usage["shell_calls"] = operations.calls_by_tool["terminal"]
+            result.usage["environment_calls"] = operations.calls
+    return diagnostics.finish(result, recorder=recorder, session_id=session_id)

@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 from harness.base import AgentResult
+from harness.diagnostics import preserve_recording_errors
 from tools.loader import validate_tools
 
 
@@ -48,7 +49,7 @@ async def run_agent(*, runner, instruction: str, model: dict, settings: dict,
             raise ValueError("A configured recorder requires output_dir; alternatively pass a recorder instance")
         recording = load_function(recorder)(Path(output_dir) / "trace", metadata=metadata)
     # Caller-provided instances retain their caller-owned lifetime.
-    with recording as active_recorder:
+    with preserve_recording_errors(recording) as active_recorder:
         result = await execute(
             instruction=instruction, model=model, tools=tools, environment=environment,
             output_dir=output_dir, workspace=workspace, timeout_sec=budget,

@@ -115,6 +115,17 @@ allowed_skills=None 允许全部技能，[] 禁用全部；registry_url 可省�
 registry_timeout 是单次 HTTP 超时；default_timeout 是脚本超时（默认300秒）；Docker transport_grace 默认30秒。
 `.py`、`.sh` 分别使用已配置的 Python、Bash；`.mjs` 使用目标环境 PATH 中的 `node` 启动，
 无需脚本执行权限或 shebang。目标环境需自行提供 Node.js；不会自动安装或切换到宿主执行。
+worker 启动失败时回传原始错误类型和 traceback，宿主异常保留容器 traceback 与异常链；
+脚本正常启动后非零退出的 stdout/stderr 继续保存在执行结果中。
+DSH 工具错误保留 `cause`、错误码、stack 和实际请求信号的取消原因；TS、JS 和当前 profile 副本保持同步。
+DSH 和 OpenHands 共用 `harness/diagnostics.py` 的 `RunDiagnostics`：关闭 SDK 前将上游异常写入
+`agent/events.jsonl` 的 `runner/error` 事件，运行任务结束后通过 recorder 的统一
+`record_failure(error, session_id=...)` 接口写入带 `source=runner` 的 `run.failed`，
+并在 `agent/result.json.error` 保存完整异常链。SDK 关闭、指标提取和归档的后续异常作为附注，
+不覆盖首次失败。公共 run_agent 同样保护原始异常，避免 recorder 关闭失败替换它。
+新增 harness 时使用 `remember(error, stage)` 保存首次失败，以 `stage(name)` 包住独立的收尾步骤，
+最后调用 `finish(result, recorder=..., session_id=...)`；无需复制异常格式、脱敏和写入流程。
+SDK 的中断/关闭顺序、指标提取以及 recorder 的 session/run 关联仍由各适配模块负责。
 `execute_resource(..., total_timeout=...)` 可让下载与脚本执行共用预算；共享工具层传入当前有效工具预算，
 下载占用的时间从脚本时限中扣除。下载预算耗尽时不启动脚本，并返回可恢复超时。
 容器传输和退出清理保留独立时限，因此调用的墙钟耗时可以超过执行预算；不会由同一计时器抢先取消清理。

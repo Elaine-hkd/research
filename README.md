@@ -5,6 +5,7 @@ SkillsBench 评估入口：`python -m evaluation --config config/skillsbench-ope
 通用 `evaluation` 调度实验；`datasets/skillsbench.py` 负责数据准备、技能注入和原生评分；
 `harness/runner.py` 提供公共 run_agent，管理配置的 recorder 和公共参数检查；
 `harness/<名称>/runner.py` 提供 execute，管理各自的 SDK 和工具，统一返回 `AgentResult`。
+`harness/diagnostics.py` 提供两者共用的异常归档：保留首次失败、附加收尾错误，统一写入事件、结果和 recorder trace。
 配置通过 `module:function` 直接组合组件，无需为每个 harness 编写 evaluation 文件。
 
 当前 SkillsBench 配置使用 OpenHands 和 `DockerEnvironment`，工具选择与

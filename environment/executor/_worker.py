@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import traceback
 
 
 def run_resource(payload):
@@ -136,7 +137,8 @@ def main():
             command_result = run_resource(payload)
         result = {"result": command_result}
     except Exception as exc:
-        result = {"error": type(exc).__name__ + ": " + str(exc)}
+        result = {"error": type(exc).__name__ + ": " + str(exc),
+                  "error_type": type(exc).__name__, "traceback": traceback.format_exc()}
     print(json.dumps(result, ensure_ascii=True))
 
 

@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import Counter
-from dataclasses import asdict
 import math
 import os
 from pathlib import Path
@@ -10,6 +9,7 @@ import time
 
 from environment.base import Environment
 from harness.base import AgentResult, task_prompt
+from harness.diagnostics import RunDiagnostics
 from utils.json_io import append_jsonl, redact, write_json
 
 
@@ -80,6 +80,7 @@ async def execute(*, instruction: str, model: dict,
     tool_specs = load_tools("openhands", selected, executor=executor) if by_name else list(selected)
     agent = Agent(llm=llm, tools=tool_specs, tool_concurrency_limit=1, include_default_tools=[])
     result = AgentResult(final_response="", finish_reason="error")
+    diagnostics = RunDiagnostics(agent_dir, sanitize=lambda value: redact(value, key))
     error_codes = []
     calls_by_tool = Counter()
     tool_snapshot = None
@@ -146,6 +147,7 @@ async def execute(*, instruction: str, model: dict,
         conversation = Conversation(**conversation_kwargs)
     else:
         conversation = recorder.create_conversation(**conversation_kwargs)
+    session_id = str(conversation.id)
     running = None
     try:
         if recorder is None:
@@ -158,10 +160,7 @@ async def execute(*, instruction: str, model: dict,
             running = asyncio.create_task(asyncio.to_thread(recorder.run, conversation, prompt))
         done, _ = await asyncio.wait([running], timeout=budget)
         if not done:
-            # A synchronous run may hold SDK state locks. Keep the event loop
-            # free while requesting interruption, then join before closing it.
-            await asyncio.to_thread(conversation.interrupt)
-            await running
+            # Save the budget failure before interruption/cleanup can fail.
             result.finish_reason = "timeout"
             raise TimeoutError(f"OpenHands exceeded the {budget}s agent budget")
         await running
@@ -171,34 +170,41 @@ async def execute(*, instruction: str, model: dict,
         result.finish_reason = "max_iterations" if "MaxIterationsReached" in error_codes else status
         if result.finish_reason not in {"finished", "stuck", "max_iterations"}:
             raise RuntimeError(f"OpenHands stopped with {status}: {error_codes}")
-        return result
+    except BaseException as exc:
+        # The SDK may throw or return paused after a tool-channel failure.
+        # Prefer the retained tool exception if another SDK error masks it.
+        tool_failure = executor.failure if executor is not None else None
+        if tool_failure is not None and exc is not tool_failure and exc.__cause__ is not tool_failure:
+            diagnostics.remember(tool_failure, "tool")
+        diagnostics.remember(exc, "run")
     finally:
         if running is not None and not running.done():
-            await asyncio.to_thread(conversation.interrupt)
-            await asyncio.gather(running, return_exceptions=True)
-        if executor is not None:
-            await executor.drain()
-        metrics = llm.metrics
-        tokens = metrics.accumulated_token_usage.model_dump(mode="json") if metrics.token_usages else None
-        result.usage = {
-            "tokens": tokens,  # Preserve the SDK representation for existing callers.
-            "input_tokens": tokens.get("prompt_tokens") if tokens else None,
-            "output_tokens": tokens.get("completion_tokens") if tokens else None,
-            "total_tokens": tokens.get("total_tokens") if tokens else None,
-            "cache_read_tokens": tokens.get("cache_read_tokens") if tokens else None,
-            "cache_write_tokens": tokens.get("cache_write_tokens") if tokens else None,
-            "reasoning_tokens": tokens.get("reasoning_tokens") if tokens else None,
-            "cost_usd": metrics.accumulated_cost if metrics.costs else None,
-            "tool_names": list(agent.tools_map),
-            "tool_calls_by_name": dict(calls_by_tool),
-        }
-        if recorder is not None and recorder.last_path is not None:
-            result.trace_path = str(recorder.last_path)
-        if executor is not None:
-            result.usage["shell_calls"] = executor.calls_by_tool["terminal"]
-            result.usage["environment_calls"] = executor.calls
-        try:
-            if agent_dir is not None:
-                write_json(agent_dir / "result.json", redact(asdict(result), key))
-        finally:
+            with diagnostics.stage("conversation.interrupt"):
+                # Synchronous SDK state locks must not block the environment loop.
+                await asyncio.to_thread(conversation.interrupt)
+            with diagnostics.stage("run.join"):
+                await running
+        with diagnostics.stage("executor.drain"):
+            if executor is not None:
+                await executor.drain()
+        with diagnostics.stage("metrics"):
+            metrics = llm.metrics
+            tokens = metrics.accumulated_token_usage.model_dump(mode="json") if metrics.token_usages else None
+            result.usage = {
+                "tokens": tokens,  # Preserve the SDK representation for existing callers.
+                "input_tokens": tokens.get("prompt_tokens") if tokens else None,
+                "output_tokens": tokens.get("completion_tokens") if tokens else None,
+                "total_tokens": tokens.get("total_tokens") if tokens else None,
+                "cache_read_tokens": tokens.get("cache_read_tokens") if tokens else None,
+                "cache_write_tokens": tokens.get("cache_write_tokens") if tokens else None,
+                "reasoning_tokens": tokens.get("reasoning_tokens") if tokens else None,
+                "cost_usd": metrics.accumulated_cost if metrics.costs else None,
+                "tool_names": list(agent.tools_map),
+                "tool_calls_by_name": dict(calls_by_tool),
+            }
+            if executor is not None:
+                result.usage["shell_calls"] = executor.calls_by_tool["terminal"]
+                result.usage["environment_calls"] = executor.calls
+        with diagnostics.stage("conversation.close"):
             conversation.close()
+    return diagnostics.finish(result, recorder=recorder, session_id=session_id)

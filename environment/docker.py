@@ -134,7 +134,9 @@ class DockerEnvironment(BenchFlowBackend):
             try:
                 envelope = json.loads(raw.stdout or "")
                 if "error" in envelope:
-                    raise ExecutionError(envelope["error"])
+                    worker_error = ExecutionError(envelope["error"])
+                    worker_error.add_note("Container worker traceback:\n" + envelope["traceback"])
+                    raise worker_error
                 return envelope["result"]
             except (ValueError, TypeError, KeyError) as exc:
                 raise ExecutionError("Invalid response from container worker") from exc

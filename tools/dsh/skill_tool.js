@@ -32,7 +32,36 @@ export function apply(ctx) {
         throw new Error('EXPOSED_SKILLS must be a JSON array of skill names')
     }
 
+    function describeError(error, seen = new Set()) {
+        if (error === null || typeof error !== 'object') return String(error)
+        if (seen.has(error)) return '[circular error reference]'
+        seen.add(error)
+        const details = {}
+        for (const key of ['name', 'message', 'code', 'stack', 'errno', 'syscall', 'address', 'port']) {
+            if (error[key] !== undefined) details[key] = String(error[key])
+        }
+        if (error.cause !== undefined) details.cause = describeError(error.cause, seen)
+        if (Array.isArray(error.errors)) details.errors = error.errors.map((item) => describeError(item, seen))
+        return details
+    }
+
     async function invoke(tool, args, signal) {
+        const requestSignal = !bridge && tool !== 'execute_resource'
+            ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : signal
+        try {
+            return await invokeRequest(tool, args, requestSignal)
+        } catch (error) {
+            // dsh may only serialize Error.message, so include the cause chain
+            // and the actual request signal's reason in that message too.
+            const details = {
+                tool, error: describeError(error), aborted: requestSignal.aborted,
+                abort_reason: requestSignal.aborted ? describeError(requestSignal.reason) : null,
+            }
+            throw new Error(JSON.stringify(details), { cause: error })
+        }
+    }
+
+    async function invokeRequest(tool, args, signal) {
         if (bridge) {
             const response = await fetch(bridge, {
                 method: 'POST',
@@ -41,7 +70,10 @@ export function apply(ctx) {
                 signal,
             })
             const result = await response.json()
-            if (!response.ok) throw new Error(result.error ?? `Tool bridge HTTP ${response.status}`)
+            if (!response.ok) {
+                const message = result.error ?? `Tool bridge HTTP ${response.status}`
+                throw new Error(message + (result.traceback ? '\n' + result.traceback : ''))
+            }
             if (typeof result.text !== 'string' || typeof result.is_error !== 'boolean') {
                 throw new Error('Invalid tool bridge response')
             }
@@ -78,9 +110,7 @@ export function apply(ctx) {
             url.searchParams.set('skill_name', args.name)
             if (tool === 'load_resource') url.searchParams.set('relative_path', args.relative_path)
         }
-        const response = await fetch(url, {
-            signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-        })
+        const response = await fetch(url, { signal })
         if (tool === 'search_skills') {
             const result = await response.text()
             if (!response.ok) throw new Error(`search_skills HTTP ${response.status}: ${result}`)

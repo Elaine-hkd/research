@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import asdict
 import json
 import secrets
+import traceback
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -167,15 +168,18 @@ class ToolBridge:
             disconnected = asyncio.create_task(reader.read(1))
             done, _ = await asyncio.wait([operation, disconnected], return_when=asyncio.FIRST_COMPLETED)
             if operation not in done:
+                self.fail(ConnectionError(
+                    f"dsh client disconnected during {payload['name']}; cancelling its environment operation"
+                ))
                 return  # The finally block cancels and joins the abandoned call.
             result = await operation
             await self._respond(writer, 200, asdict(result))
         except ValueError as exc:
             if self.operations.failure is not None:
                 self.fail(exc)
-                await self._respond(writer, 500, {"error": str(exc)})
+                await self._respond(writer, 500, self._error_details(exc))
             else:
-                await self._respond(writer, 400, {"error": str(exc)})
+                await self._respond(writer, 400, self._error_details(exc))
         except (ConnectionError, asyncio.IncompleteReadError) as exc:
             # Distinguish backend transport errors from a client disconnect.
             if (operation is not None and operation.done() and not operation.cancelled()
@@ -184,10 +188,10 @@ class ToolBridge:
         except (TimeoutError, asyncio.LimitOverrunError) as exc:
             if operation is not None:
                 self.fail(exc)
-            await self._respond(writer, 500 if operation is not None else 400, {"error": str(exc)})
+            await self._respond(writer, 500 if operation is not None else 400, self._error_details(exc))
         except Exception as exc:
             self.fail(exc)
-            await self._respond(writer, 500, {"error": str(exc)})
+            await self._respond(writer, 500, self._error_details(exc))
         finally:
             pending = [task for task in (operation, disconnected) if task is not None]
             for task in pending:
@@ -201,6 +205,11 @@ class ToolBridge:
             except OSError:
                 pass
             self._connections.discard(connection)
+
+    @staticmethod
+    def _error_details(error):
+        return {"error": str(error), "error_type": type(error).__name__,
+                "traceback": "".join(traceback.format_exception(error))}
 
     @staticmethod
     async def _respond(writer, status: int, payload: dict) -> None:
