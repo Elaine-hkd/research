@@ -29,7 +29,7 @@ def run_task(task, exposed_skills: list[str] | None = None, *, tools=None):
     print("\n记录文件：", result.trace_path)
 
     print("\n结束原因：", result.finish_reason)
-    # Assistant replies are rendered by the runner's shared console output.
+    # 助手回复由运行器的共用控制台输出负责显示。
     return result
 
 def main():

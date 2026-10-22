@@ -1,4 +1,4 @@
-"""Run native dsh with registry tools or a bridge to the current task environment."""
+"""使用注册中心工具或当前任务环境的桥接接口运行原生 dsh。"""
 
 import asyncio
 from collections import Counter
@@ -32,7 +32,7 @@ def _trace_metrics(path: Path) -> tuple[int, dict]:
         usage[field] = (sum(values) if values and all(
             isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
             for value in values) else None)
-    # The current recorder exposes token usage, not an authoritative dollar cost.
+    # 当前记录器提供 token 用量，不能据此确定实际美元费用。
     usage.update(cost_usd=None, tool_calls_by_name=dict(calls))
     return sum(calls.values()), usage
 
@@ -43,14 +43,14 @@ async def execute(*, instruction: str, model: dict,
                     skill_catalog: list[dict[str, str]] | None = None,
                     recorder=None, on_notification=None, tool_timeout_sec: float = 120,
                     max_output_chars: int = 20000, **options) -> AgentResult:
-    """The caller owns environment/recorder; this call owns bridge and SDK child.
+    """调用方管理环境和记录器；本次调用管理桥接接口及 SDK 子进程。
 
-    Tool limits are consumed here, never forwarded to DeepSeekHarnessConfig.
-    With no environment, preserve the existing four registry-server tools.
-    Native prompts and the dataset's existing task_prompt() remain unchanged.
+    工具限制在此处理，不传入 DeepSeekHarnessConfig。
+    没有环境时，保留现有四个注册中心服务端工具。
+    保留原生提示词及数据集已有的 task_prompt()。
     """
     if environment is not None and output_dir is None:
-        raise ValueError("Container runs require output_dir for their isolated workspace")
+        raise ValueError("容器运行需要 output_dir 来存放独立工作区")
     budget = timeout_sec
     deadline = time.monotonic() + budget if budget is not None else float("inf")
     selected = validate_tools(list(REGISTRY_TOOLS) if tools is None else tools)
@@ -58,7 +58,7 @@ async def execute(*, instruction: str, model: dict,
     key_name = model_options.pop("api_key_env")
     key = os.environ[key_name]
     if not key:
-        raise ValueError(f"Empty model credential environment variable: {key_name}")
+        raise ValueError(f"模型凭据环境变量为空：{key_name}")
     prompt = task_prompt(instruction, skill_catalog)
     agent_dir = Path(output_dir) if output_dir is not None else None
     if agent_dir is not None:
@@ -105,7 +105,7 @@ async def execute(*, instruction: str, model: dict,
                 if (not isinstance(schemas, list) or len(actual) != len(schemas)
                         or not all(isinstance(name, str) for name in actual)
                         or len(actual) != len(set(actual)) or set(actual) != set(selected)):
-                    validation_error = ValueError(f"dsh model-visible tools differ from configuration: {actual!r}")
+                    validation_error = ValueError(f"dsh 的模型可见工具与配置不一致：{actual!r}")
                     if bridge is not None:
                         loop.call_soon_threadsafe(bridge.fail, validation_error)
                 elif tool_snapshot is None:
@@ -137,21 +137,21 @@ async def execute(*, instruction: str, model: dict,
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             result.finish_reason = "timeout"
-            raise TimeoutError("dsh agent budget exhausted before initialization")
+            raise TimeoutError("初始化前 dsh 智能体时间预算已耗尽")
         if budget is not None:
             options["initialize_timeout_seconds"] = min(options.get("initialize_timeout_seconds", 30), remaining)
         harness = DeepSeekHarness(
             **options, cwd=str(workspace), patches=tool_options["patches"], env=child_env,
             **model_options, api_key=key,
         )
-        # Join initialization before shutdown, including when this coroutine is
-        # cancelled, so a still-starting worker cannot launch after cleanup.
+        # 关闭前需等待初始化结束，即使当前协程已取消，
+        # 也要防止仍在初始化的工作进程在清理后启动。
         starting = asyncio.create_task(asyncio.to_thread(harness.start))
         await asyncio.shield(starting)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             result.finish_reason = "timeout"
-            raise TimeoutError(f"dsh exceeded the {budget}s agent budget during initialization")
+            raise TimeoutError(f"dsh 超过了 {budget} 秒的智能体时间预算，发生于初始化阶段")
         if recorder is None:
             running = asyncio.create_task(asyncio.to_thread(
                 harness.run, prompt, session_id=session_id, on_notification=on_event,
@@ -168,14 +168,14 @@ async def execute(*, instruction: str, model: dict,
                                      return_when=asyncio.FIRST_COMPLETED)
         if not done:
             result.finish_reason = "timeout"
-            raise TimeoutError(f"dsh exceeded the {budget}s agent budget")
+            raise TimeoutError(f"dsh 超过了 {budget} 秒的智能体时间预算")
         if bridge is not None and bridge.failure is not None:
-            raise RuntimeError("dsh task tool channel failed") from bridge.failure
+            raise RuntimeError("dsh 任务工具通道失败") from bridge.failure
         native = await running
         if validation_error is not None:
             raise validation_error
         if operations is not None and operations.failure is not None:
-            raise RuntimeError("Task container command channel failed") from operations.failure
+            raise RuntimeError("任务容器命令通道失败") from operations.failure
         result.final_response = native.final_response
         calls = Counter(event.get("data", {}).get("name", "unknown")
                         for event in native.events if event.get("type") == "tool/call")
@@ -185,11 +185,11 @@ async def execute(*, instruction: str, model: dict,
         if result.finish_reason not in {"finished", "stuck", "max_iterations"}:
             reason = next((event.get("data", {}).get("reason") for event in reversed(native.events)
                            if event.get("type") == "turn/end"), None)
-            raise RuntimeError(f"dsh stopped with {result.finish_reason}: {sanitize(reason)}")
+            raise RuntimeError(f"dsh 已停止，结束原因：{result.finish_reason}: {sanitize(reason)}")
         if selected and tool_snapshot is None:
-            raise RuntimeError("dsh did not report the configured model-visible tools")
+            raise RuntimeError("dsh 未报告配置中指定的模型可见工具")
     except BaseException as exc:
-        # Persist the upstream error before close() makes run() report stdout closed.
+        # 在 close() 使 run() 报告标准输出已关闭之前，先保存上游异常。
         diagnostics.remember(exc, "run")
     finally:
         if starting is not None:
@@ -199,7 +199,7 @@ async def execute(*, instruction: str, model: dict,
             if bridge is not None:
                 await bridge.close()
         with diagnostics.stage("harness.close"):
-            # SDK close wakes run() and reaps its runtime subprocess.
+            # SDK 的 close 会唤醒 run() 并回收其运行时子进程。
             if harness is not None:
                 await asyncio.to_thread(harness.close)
         if failing is not None:

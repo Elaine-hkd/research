@@ -1,4 +1,4 @@
-"""Harness-independent command, file and resource operations in one environment."""
+"""同一环境中的命令、文件和资源操作，不依赖具体 harness。"""
 
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -40,19 +40,19 @@ elif operation == "replace_text":
         content = stream.read()
     count = content.count(data["old_text"])
     if count != data["expected_occurrences"]:
-        raise ValueError(f"Expected {data['expected_occurrences']} matches, found {count}; file unchanged")
+        raise ValueError(f"预期匹配 {data['expected_occurrences']} 处，实际找到 {count} 处；文件未修改")
     with path.open("w", encoding="utf-8", newline="") as stream:
         stream.write(content.replace(data["old_text"], data["new_text"]))
     print(json.dumps({"path": str(path), "replacements": count}))
 else:
-    raise ValueError(f"Unknown file operation: {operation}")
+    raise ValueError(f"未知文件操作：{operation}")
 '''
 
 
 def file_command(operation: str, arguments: dict) -> str:
-    """Build the existing container-side UTF-8 file operation; argv holds JSON data."""
+    """构造现有容器端 UTF-8 文件操作命令，argv 仅承载 JSON 数据。"""
     if operation not in {"read_file", "write_file", "replace_text"}:
-        raise ValueError(f"Unknown file operation: {operation}")
+        raise ValueError(f"未知文件操作：{operation}")
     return shlex.join([
         "python3", "-X", "utf8", "-c", _FILE_PROGRAM, operation,
         json.dumps(arguments, ensure_ascii=False),
@@ -60,15 +60,15 @@ def file_command(operation: str, arguments: dict) -> str:
 
 
 class EnvironmentOperations:
-    """The caller owns the environment, event loop and in-flight operation tasks."""
+    """调用方管理环境、事件循环及尚未结束的操作任务。"""
 
     def __init__(self, environment, *, deadline: float, timeout: float,
                  output_chars: int, log_path: Path):
         if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or timeout <= 0):
-            raise ValueError("tool_timeout_sec must be a positive finite number")
+            raise ValueError("tool_timeout_sec 必须为有限正数")
         if type(output_chars) is not int or output_chars < 1:
-            raise ValueError("max_output_chars must be a positive integer")
+            raise ValueError("max_output_chars 必须为正整数")
         self.environment = environment
         self.deadline = deadline
         self.timeout = timeout
@@ -101,7 +101,7 @@ class EnvironmentOperations:
         try:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError("Agent time budget exhausted")
+                raise TimeoutError("智能体时间预算已耗尽")
             timeout = min(requested_timeout or self.timeout, self.timeout, remaining)
             self.calls += 1
             call_index = self.calls
@@ -109,8 +109,8 @@ class EnvironmentOperations:
             append_jsonl(self.log_path, {"type": "call", "index": call_index,
                                        "tool_name": tool_name, "arguments": arguments})
             if resource:
-                # The executor budgets downloads and script execution, then lets
-                # the worker finish bounded cleanup instead of cancelling it.
+                # 执行器为下载和脚本执行分配时间预算，再由工作进程
+                # 在规定时限内完成清理，不直接取消工作进程。
                 result = await self.environment.executor.execute_resource(
                     arguments["skill_name"], arguments["relative_path"],
                     arguments=arguments.get("arguments", []), timeout=timeout,
@@ -125,7 +125,7 @@ class EnvironmentOperations:
             if result.timed_out:
                 raw["error"] = {
                     "code": "TOOL_TIMEOUT",
-                    "message": f"Tool exceeded its {timeout:g}s budget; execution stopped or was not started",
+                    "message": f"工具超过了 {timeout:g} 秒的时间预算；执行已停止或尚未启动",
                     "recoverable": True,
                 }
             append_jsonl(self.log_path, {"type": "result", "index": call_index,
@@ -133,13 +133,13 @@ class EnvironmentOperations:
             for field in ("stdout", "stderr"):
                 if len(raw[field]) > self.output_chars:
                     raw[field] = (raw[field][:self.output_chars]
-                                  + "\n[truncated; full output saved in tool-calls.jsonl]")
+                                  + "\n[输出已截断，完整输出已保存至 tool-calls.jsonl]")
             return OperationResult(json.dumps(raw, ensure_ascii=False), not result.success)
         except ValueError as exc:
             if not resource:
                 self.failure = exc
                 raise
-            # Invalid resource names/paths remain model tool errors.
+            # 无效资源名称和路径仍作为模型可见的工具错误返回。
             raw = {"error": str(exc)}
             append_jsonl(self.log_path, {"type": "result", "index": call_index,
                                        "tool_name": tool_name, **raw})

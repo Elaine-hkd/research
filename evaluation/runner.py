@@ -1,4 +1,4 @@
-"""Sequential trials with independent environments and durable per-trial results."""
+"""顺序执行试验，为每次试验提供独立环境并持久保存结果。"""
 
 import asyncio
 from contextlib import contextmanager
@@ -28,7 +28,7 @@ def _local_time() -> str:
 
 @contextmanager
 def _record_stage(row: dict, stage: str, result_path: Path, secret: str):
-    """Persist measured wall time even when a stage fails or is cancelled."""
+    """即使阶段失败或被取消，也保存实际经过的时间。"""
     started = time.monotonic()
     try:
         yield
@@ -49,24 +49,24 @@ def _versions() -> dict:
 
 def _score(score: Score) -> None:
     if not isinstance(score, Score):
-        raise TypeError("Evaluator must return evaluation.Score")
+        raise TypeError("评分器必须返回 evaluation.Score")
     value = score.reward
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError("Evaluator reward must be a finite number in [0, 1]")
+        raise ValueError("评分器奖励必须为 [0, 1] 范围内的有限数值")
     json.dumps(score.metrics, allow_nan=False)
 
 
 async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                          setup_environment=None, run_agent=None, evaluate=None,
                          create_environment=None) -> Path:
-    """Replace any component by passing a function, or configure module:function.
+    """通过传入函数或配置 module:function 替换任意组件。
 
-    Dataset: load(index, ids) -> list[Task]; prepare(task, destination, condition)
-    -> PreparedTask. Optional setup: async (context) after environment.start().
-    Configured tasks are sampled once; explicit tasks are already selected.
-    Agent: common run_agent calls the configured execute(**native_options).
-    No evaluation objects are passed to harnesses or their recorders.
-    Evaluator: async (context, agent_result) -> Score. Environments are external factories.
+    数据集：load(index, ids) -> list[Task]；prepare(task, destination, condition)
+    -> PreparedTask。可选设置步骤：在 environment.start() 后调用异步 setup(context)。
+    配置的任务只抽样一次；显式传入的任务视为已选定。
+    智能体：公共 run_agent 调用配置的 execute(**native_options)。
+    不向 harness 或其记录器传递评估对象。
+    评分器：异步 (context, agent_result) -> Score。环境由外部工厂创建。
     """
     output = experiment_directory(config)
     # 加载数据集和任务
@@ -75,10 +75,10 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
         tasks = load_tasks(dataset)
     tasks = list(tasks)
     if not tasks:
-        raise ValueError("Dataset selected no tasks")
+        raise ValueError("数据集未选中任何任务")
     ids = [task.id for task in tasks]
     if len(set(ids)) != len(ids) or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) for value in ids):
-        raise ValueError("Task ids must be unique, non-empty and valid path components")
+        raise ValueError("任务 ID 必须唯一、非空，且可用作路径组成部分")
     
     
     prepare_task = prepare_task or load_function(dataset["prepare"])
@@ -90,7 +90,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     factory = environment_options.pop("factory", None)
     if create_environment is None:
         if factory is None:
-            raise ValueError("Configure environment.factory or pass create_environment")
+            raise ValueError("请配置 environment.factory 或传入 create_environment")
         create_environment = load_function(factory)
     agent_options = dict(config["agent"])
     agent_options.pop("runner", None)
@@ -99,15 +99,15 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     key_name = config["model"]["api_key_env"]
     secret = os.environ.get(key_name)
     if not secret:
-        raise ValueError(f"Set model credential environment variable {key_name} before running")
+        raise ValueError(f"运行前请设置模型凭据环境变量 {key_name}。")
 
     # 设置输出目录
     try:
         output.mkdir(parents=True)
     except FileExistsError as exc:
         raise FileExistsError(
-            f"Experiment directory already exists: {output}. "
-            "Choose a new experiment name with --name or config.name."
+            f"实验目录已存在：{output}。"
+            "请通过 --name 或 config.name 选择新实验名称。"
         ) from exc
     experiment_id = uuid4().hex
     
@@ -132,7 +132,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     write_json(output / "manifest.json", manifest)
     
     rows = []
-    print(f"Experiment: {output}\nPlanned trials: {total}", flush=True)
+    print(f"实验目录：{output}\n计划试验数：{total}", flush=True)
     try:
         for task in tasks:
             for repeat in range(1, repeats + 1):
@@ -156,13 +156,13 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                         )),
                     }
                     stage, environment = "prepare", None
-                    print(f"[{len(rows) + 1}/{total}] {trial_id}: prepare", flush=True)
+                    print(f"[{len(rows) + 1}/{total}] {trial_id}：准备任务", flush=True)
                     try:
                         # 准备任务
                         with _record_stage(row, stage, result_path, secret):
                             prepared = prepare_task(task, trial_dir / "task", condition)
                             if not isinstance(prepared, PreparedTask):
-                                raise TypeError("Dataset preparer must return evaluation.PreparedTask")
+                                raise TypeError("数据集准备函数必须返回 evaluation.PreparedTask")
                             write_json(trial_dir / "task-info.json", {
                                 "task_id": task.id, "source": task.source,
                                 "skill_catalog": prepared.skill_catalog,
@@ -187,7 +187,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
 
                         # 智能体运行
                         stage = "agent"
-                        print(f"  {trial_id}: agent", flush=True)
+                        print(f"  {trial_id}：运行智能体", flush=True)
                         with _record_stage(row, stage, result_path, secret):
                             agent_result = await run_harness(
                                 runner=run_agent,
@@ -210,7 +210,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
 
                         #评估任务结果
                         stage = "evaluate"
-                        print(f"  {trial_id}: evaluate", flush=True)
+                        print(f"  {trial_id}：评估结果", flush=True)
                         with _record_stage(row, stage, result_path, secret):
                             score = await evaluate(context, agent_result)
                             _score(score)
@@ -233,7 +233,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                                 row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
                                 row["errors"].append({"stage": "cleanup", "type": type(exc).__name__, "message": redact(str(exc), secret)})
                                 if not isinstance(exc, Exception):
-                                    # Save the trial before propagating cancellation from cleanup.
+                                    # 传播清理阶段的取消异常前，先保存本次试验。
                                     cleanup_interrupt = exc
                         if row["status"] == "running":
                             row["status"] = "completed"
@@ -249,13 +249,14 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                             base = trial_dir.resolve()
                             row["trace_path"] = path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
                         row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
-                        # Reward remains useful if only cleanup failed; status exposes it.
+                        # 仅清理失败时奖励仍然有效，失败情况由状态字段体现。
                         safe_row = redact(row, secret)
                         write_json(result_path, safe_row)
                         append_jsonl(output / "results.jsonl", safe_row)
                         rows.append(safe_row)
                         write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
-                        print(f"  {trial_id}: {row['status']}, reward={row['reward']}", flush=True)
+                        status_text = {"completed": "已完成", "cancelled": "已取消", "error": "错误"}[row["status"]]
+                        print(f"  {trial_id}：{status_text}，奖励={row['reward']}", flush=True)
                         if cleanup_interrupt is not None:
                             raise cleanup_interrupt
     finally:
@@ -269,5 +270,5 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
         manifest["status"] = "interrupted" if interrupted else ("error" if any(row["errors"] for row in rows) else "completed")
         write_json(output / "manifest.json", manifest)
         write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
-        print(f"Results saved: {output}", flush=True)
+        print(f"结果已保存：{output}", flush=True)
     return output

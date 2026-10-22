@@ -1,4 +1,4 @@
-"""Readable console projection of dsh events; durable events stay unchanged."""
+"""将 dsh 事件转换为可读控制台输出，保留持久化事件原样。"""
 
 from datetime import datetime
 import json
@@ -21,7 +21,7 @@ def _decode_json(value):
         try:
             return json.loads(value)
         except ValueError:
-            pass  # Plain text remains plain text, including malformed tool JSON.
+            pass  # 保留纯文本原样，包括格式错误的工具 JSON。
     return value
 
 
@@ -48,13 +48,13 @@ def _result_text(value) -> str:
         return _pretty_json(value)
     metadata = dict(value)
     sections = []
-    # Expand textual fields so JSON-escaped newlines become readable output.
+    # 展开文本字段，使 JSON 转义的换行在输出中正常显示。
     if isinstance(metadata.get("skill"), dict):
         metadata["skill"] = dict(metadata["skill"])
         content = metadata["skill"].pop("content", None)
         if isinstance(content, str):
             sections.append("SKILL.md\n" + (content or "(空)"))
-    for field, label in (("stdout", "stdout"), ("stderr", "stderr"), ("content", "资源内容")):
+    for field, label in (("stdout", "标准输出"), ("stderr", "标准错误"), ("content", "资源内容")):
         if isinstance(metadata.get(field), str):
             sections.append(label + "\n" + (metadata.pop(field) or "(空)"))
     if metadata:
@@ -106,15 +106,15 @@ def _wrap(text: str, width: int):
 
 
 class DshConsole:
-    """Render returned reasoning/replies and correlate tool results by call ID.
+    """显示返回的推理和回复，并按调用 ID 关联工具结果。
 
-    assistant/message contains completed message blocks in this SDK. It is not
-    a live token notification; stream data is only a fallback for partial attempts.
+    此 SDK 的 assistant/message 包含完整消息块，不是实时 token 通知；
+    流数据仅用于补充未完成的尝试。
     """
 
     def __init__(self, *, max_output_chars=20000, event_log_path: Path | None = None):
         if type(max_output_chars) is not int or max_output_chars < 1:
-            raise ValueError("max_output_chars must be a positive integer")
+            raise ValueError("max_output_chars 必须为正整数")
         self.max_output_chars = max_output_chars
         self.event_log_path = event_log_path
         self.stream = sys.stdout
@@ -127,7 +127,7 @@ class DshConsole:
         return f"\x1b[{color}m{text}\x1b[0m" if self.color else text
 
     def _block(self, title: str, text: str, *, color="36", timestamp="") -> None:
-        # Strip content-supplied terminal controls; only our own headers use ANSI.
+        # 移除内容中的终端控制字符，仅自己的标题使用 ANSI。
         text = _CONTROL.sub("", _ANSI.sub("", text).replace("\r\n", "\n").replace("\r", "\n"))
         if len(text) > self.max_output_chars:
             omitted = len(text) - self.max_output_chars
@@ -183,7 +183,7 @@ class DshConsole:
                     if isinstance(content, dict) and content.get("type") == "text":
                         parts.append(_result_text(content.get("text", "")))
                     elif isinstance(content, dict):
-                        parts.append(f"[非文本内容：{content.get('type', 'unknown')}]")
+                        parts.append(f"[非文本内容：{content.get('type', '未知')}]")
                 if data.get("error") is not None:
                     parts.append(_pretty_json(data["error"]))
                 self._block(f"工具结果 {label} · {'错误' if failed else '返回'}", "\n\n".join(parts),

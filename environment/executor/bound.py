@@ -1,4 +1,4 @@
-"""Registry-backed executors bound to the lifetime of their owning environment."""
+"""基于注册中心的执行器，生命周期绑定到所属环境。"""
 
 import asyncio
 import time
@@ -25,15 +25,15 @@ class BoundExecutor:
 
     async def execute_resource(self, skill_name, relative_path, arguments=(), timeout=None,
                                *, total_timeout=None):
-        """Optionally share a budget across downloads and script execution.
+        """可选地为下载和脚本执行设置共享时间预算。
 
-        Transport and process cleanup retain their own bounded grace periods;
-        an outer timer must not cancel them at the script's execution deadline.
-        Omitting total_timeout preserves the standalone script timeout contract.
+        传输和进程清理保留各自有时限的宽限期；
+        外层计时器不得在脚本截止时间到达时取消清理。
+        省略 total_timeout 时，保留独立脚本的超时约定。
         """
         self.environment._require_running()
         if self.registry is None:
-            raise ValueError("Configure registry_url on the environment before executing skills")
+            raise ValueError("执行技能前，请在环境上配置 registry_url")
         payload = request_payload(
             skill_name, relative_path, arguments,
             self._timeout if timeout is None else timeout, self._workdir,
@@ -50,10 +50,10 @@ class BoundExecutor:
         except TimeoutError:
             if not download_timer.expired():
                 raise
-            # Only read-only registry I/O was started; no worker can launch later.
+            # 仅启动了注册中心只读请求，之后不会有工作进程启动。
             return ExecutionResult(
                 provider=self.provider, exit_code=None, stdout="",
-                stderr="Resource time budget exhausted while downloading files; script was not started",
+                stderr="下载文件时资源时间预算已耗尽，脚本尚未启动",
                 timed_out=True, duration_ms=round((time.monotonic() - started) * 1000),
             )
         if budget is not None:
@@ -61,10 +61,10 @@ class BoundExecutor:
             if remaining <= 0:
                 return ExecutionResult(
                     provider=self.provider, exit_code=None, stdout="",
-                    stderr="Resource time budget exhausted before execution; script was not started",
+                    stderr="执行前资源时间预算已耗尽，脚本尚未启动",
                     timed_out=True, duration_ms=round((time.monotonic() - started) * 1000),
                 )
             payload["timeout"] = min(payload["timeout"], remaining)
-        # The owning environment rechecks readiness under its lifecycle lock.
+        # 所属环境会在生命周期锁内再次检查就绪状态。
         result = await self.environment._run_worker(payload)
         return ExecutionResult(provider=self.provider, **result)

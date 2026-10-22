@@ -33,7 +33,7 @@ class ExecuteResourceAction(Action):
     def check_nonempty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError(
-                "skill_name and relative_path must not be empty"
+                "skill_name 和 relative_path 不能为空"
             )
         return value
 
@@ -44,7 +44,7 @@ class ExecuteResourceAction(Action):
             not math.isfinite(value) or value <= 0
         ):
             raise ValueError(
-                "timeout must be a positive finite number"
+                "timeout 必须为有限正数"
             )
         return value
 

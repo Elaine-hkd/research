@@ -1,4 +1,4 @@
-"""A TOML experiment file and ordinary importable function references."""
+"""读取 TOML 实验文件，解析普通可导入函数的引用。"""
 
 from pathlib import Path
 import re
@@ -11,32 +11,32 @@ from harness.runner import load_function
 def function_reference(value, name: str) -> None:
     if (not isinstance(value, str)
             or not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*", value)):
-        raise ValueError(f"{name} must be a module:function reference")
+        raise ValueError(f"{name} 必须为 module:function 引用")
 
 
 def _directory_component(value, name: str) -> str:
-    """Keep readable names while rejecting traversal and invalid Windows names."""
+    """保留可读名称，同时拒绝路径穿越和 Windows 无效名称。"""
     if (not isinstance(value, str) or not value or value != value.strip()
             or value in {".", ".."} or value.endswith(".")
             or re.search(r'[<>:"/\\|?*\x00-\x1f]', value)):
-        raise ValueError(f"{name} must be a non-empty directory name without path separators, "
-                         "invalid filename characters, or surrounding spaces/trailing dots")
+        raise ValueError(f"{name} 必须为非空目录名，不能包含路径分隔符、"
+                         "无效文件名字符、首尾空格或末尾句点")
     if re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?", value, re.IGNORECASE):
-        raise ValueError(f"{name} cannot use a reserved Windows device name: {value!r}")
+        raise ValueError(f"{name} 不能使用 Windows 保留设备名称：{value!r}")
     return value
 
 
 def experiment_directory(config: dict) -> Path:
-    """Resolve output_dir/benchmark/harness/model/name without creating files."""
-    name = _directory_component(config["name"], "Experiment name")
+    """解析 output_dir/benchmark/harness/model/name 路径，不创建文件。"""
+    name = _directory_component(config["name"], "实验名称")
     dataset_module = config["dataset"]["loader"].partition(":")[0]
-    benchmark = _directory_component(dataset_module.rsplit(".", 1)[-1], "Benchmark directory")
+    benchmark = _directory_component(dataset_module.rsplit(".", 1)[-1], "基准目录")
     runner_module = config["agent"]["runner"].partition(":")[0]
     harness = _directory_component(
-        runner_module.removesuffix(".runner").rsplit(".", 1)[-1], "Harness directory",
+        runner_module.removesuffix(".runner").rsplit(".", 1)[-1], "Harness 目录",
     )
     model = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", config["model"]["model"])
-    model = _directory_component(model, "Model directory")
+    model = _directory_component(model, "模型目录")
     return Path(config["output_dir"]) / benchmark / harness / model / name
 
 
@@ -46,39 +46,39 @@ def load_config(path: Path) -> dict:
     allowed = {"name", "output_dir", "conditions", "repeats", "pass_threshold",
                "dataset", "model", "agent", "evaluator", "environment"}
     if extra := config.keys() - allowed:
-        raise ValueError(f"Unknown experiment settings: {sorted(extra)}")
-    _directory_component(config["name"], "Experiment name")
+        raise ValueError(f"未知实验配置项：{sorted(extra)}")
+    _directory_component(config["name"], "实验名称")
     config["output_dir"] = str((path.parent / config.get("output_dir", "../logs/evaluation")).resolve())
     config.setdefault("repeats", 1)
     if type(config["repeats"]) is not int or config["repeats"] < 1:
-        raise ValueError("repeats must be a positive integer")
+        raise ValueError("repeats 必须为正整数")
     conditions = config.setdefault("conditions", ["default"])
     if (not isinstance(conditions, list) or not conditions
             or any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", item)
                    for item in conditions)
             or len(conditions) != len(set(conditions))):
-        raise ValueError("conditions must contain distinct valid path components")
+        raise ValueError("conditions 必须包含互不重复的有效路径组成部分")
     threshold = config.setdefault("pass_threshold", 1.0)
     if isinstance(threshold, bool) or not isinstance(threshold, (float, int)) or not 0 <= threshold <= 1:
-        raise ValueError("pass_threshold must be in [0, 1]")
+        raise ValueError("pass_threshold 必须在 [0, 1] 范围内")
     dataset = config["dataset"]
     if extra := dataset.keys() - {"index", "task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
-        raise ValueError(f"Unknown dataset settings: {sorted(extra)}")
+        raise ValueError(f"未知数据集配置项：{sorted(extra)}")
     dataset["index"] = str((path.parent / dataset["index"]).resolve(strict=True))
     if "task_ids" in dataset and (not isinstance(dataset["task_ids"], list)
                                 or not all(isinstance(item, str) for item in dataset["task_ids"])):
-        raise ValueError("dataset.task_ids must be a list of task ids")
+        raise ValueError("dataset.task_ids 必须为任务 ID 列表")
     for key in ("loader", "prepare"):
         function_reference(dataset.get(key), f"dataset.{key}")
     if dataset.get("setup") is not None:
         function_reference(dataset["setup"], "dataset.setup")
     model = config["model"]
     if "api_key" in model:
-        raise ValueError("Store the model API key in an environment variable; use api_key_env")
+        raise ValueError("请将模型 API 密钥存入环境变量，并使用 api_key_env 指定")
     if not isinstance(model.get("model"), str) or not model["model"].strip():
-        raise ValueError("model.model must be non-empty")
+        raise ValueError("model.model 不能为空")
     if not isinstance(model.get("api_key_env"), str) or not model["api_key_env"].strip():
-        raise ValueError("model.api_key_env must name an environment variable")
+        raise ValueError("model.api_key_env 必须指定环境变量名称")
     agent = config.setdefault("agent", {})
     function_reference(agent.get("runner"), "agent.runner")
     if "recorder" in agent:
@@ -87,7 +87,7 @@ def load_config(path: Path) -> dict:
         agent["tools"] = validate_tools(agent["tools"])
     evaluator = config.setdefault("evaluator", {})
     if extra := evaluator.keys() - {"function"}:
-        raise ValueError(f"Unknown evaluator settings: {sorted(extra)}")
+        raise ValueError(f"未知评分器配置项：{sorted(extra)}")
     function_reference(evaluator.get("function"), "evaluator.function")
     environment = config.setdefault("environment", {})
     function_reference(environment.get("factory"), "environment.factory")

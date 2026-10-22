@@ -1,6 +1,6 @@
-# Default experiment name; override per run with --name "my-experiment" (Chinese is supported).
+# 默认实验名称；每次运行可用 --name "实验名称" 覆盖，支持中文。
 name = "skillsbench-openhands-shell-only"
-# Paths are relative to this TOML file; results use benchmark/harness/model/name.
+# 路径相对于此 TOML 文件；结果按 benchmark/harness/model/name 存放。
 output_dir = "../logs/exp"
 conditions = ["with-skill"]
 repeats =3
@@ -8,9 +8,9 @@ pass_threshold = 1.0
 
 [dataset]
 index = "../data/task/skillsbench.json"
-# Delete task_ids to use the complete index as the candidate pool.
+# 删除 task_ids 后，使用完整索引作为候选任务池。
 # task_ids = ["3d-scan-calc"]
-# Optional: sample without replacement from the candidate pool.
+# 可选：从候选任务池中进行不放回抽样。
 sample_size = 10
 seed = 42
 loader = "datasets.skillsbench:load_tasks"
@@ -23,7 +23,7 @@ base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
 timeout = 120
 num_retries = 0
-# Optional SDK fields, when supported by the selected model:
+# 可选 SDK 字段，需所选模型支持：
 # temperature = 0.0
 # max_output_tokens = 8192
 # reasoning_effort = "high"
@@ -34,14 +34,14 @@ recorder = "agent_session_analyzer:OpenHandsRecorder"
 max_iterations = 100
 tool_timeout_sec = 120
 max_output_chars = 20000
-# Shared tool names; the selected harness loads its existing implementations.
-# Shell baseline; compare with skillsbench.toml using the same experiment settings.
+# 共用工具名称，由所选 harness 加载已有实现。
+# Shell 基线；与 skillsbench.toml 对比时使用相同的实验设置。
 tools = [
     "terminal",
     "think",
     "finish",
 ]
-# Omit timeout_sec to honor each task's agent.timeout_sec.
+# 省略 timeout_sec 时，遵循各任务的 agent.timeout_sec。
 
 [evaluator]
 function = "datasets.skillsbench:evaluate"

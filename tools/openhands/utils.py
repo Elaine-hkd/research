@@ -12,26 +12,26 @@ def get_json(endpoint: str, params: dict[str, str], *, registry=None) -> str:
         return json_text(registry.request(endpoint, params))
     base_url = os.environ.get("SKILL_REGISTRY_URL")
     if not base_url:
-        raise RuntimeError("Missing SKILL_REGISTRY_URL")
+        raise RuntimeError("缺少 SKILL_REGISTRY_URL")
     with requests.get(
         urljoin(base_url, endpoint),
         params=params,
         timeout=None,
     ) as response:
         if not response.ok:
-            raise RuntimeError(f"Registry HTTP {response.status_code}")
+            raise RuntimeError(f"注册中心请求失败，HTTP {response.status_code}")
         return json_text(response.json())
 
 def post_json(endpoint: str, params: dict[str, str]) -> str:
     """对应原代码的 request()：读取 JSON，再序列化为文本。"""
     base_url = os.environ.get("SKILL_REGISTRY_URL")
     if not base_url:
-        raise RuntimeError("Missing SKILL_REGISTRY_URL")
+        raise RuntimeError("缺少 SKILL_REGISTRY_URL")
     with requests.post(
         urljoin(base_url, endpoint),
         data=params,
         timeout=None,
     ) as response:
         if not response.ok:
-            raise RuntimeError(f"Registry HTTP {response.status_code}")
+            raise RuntimeError(f"注册中心请求失败，HTTP {response.status_code}")
         return json_text(response.json())

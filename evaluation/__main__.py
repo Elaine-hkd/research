@@ -1,4 +1,4 @@
-"""Run with: python -m evaluation --config config/skillsbench-openhands.toml [--plan]."""
+"""运行方式：python -m evaluation --config config/skillsbench-openhands.toml [--plan]。"""
 
 import argparse
 import asyncio
@@ -10,11 +10,11 @@ from .dataset import load_tasks
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate an agent on isolated task environments")
+    parser = argparse.ArgumentParser(description="在隔离的任务环境中评估智能体")
     parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
-    parser.add_argument("--name", help="Experiment name; overrides config.name and supports Chinese")
-    parser.add_argument("--plan", action="store_true", help="Read config and tasks only; no model calls or Docker")
-    parser.add_argument("--task", nargs="+", help="Override dataset.task_ids")
+    parser.add_argument("--name", help="实验名称，覆盖 config.name，支持中文")
+    parser.add_argument("--plan", action="store_true", help="仅读取配置和任务，不调用模型或启动 Docker")
+    parser.add_argument("--task", nargs="+", help="覆盖 dataset.task_ids")
     args = parser.parse_args()
     config = load_config(args.config)
     if args.name is not None:
@@ -42,7 +42,7 @@ def main() -> int:
             "environment_factory": config["environment"]["factory"],
         }, ensure_ascii=False, indent=2))
         return 0
-    # Match the existing harness convention; environment values take precedence.
+    # 遵循现有 harness 约定，环境变量中的值优先。
     from dotenv import load_dotenv
     from .runner import run_evaluation
 

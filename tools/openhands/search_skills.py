@@ -39,7 +39,7 @@ class SearchSkillsExecutor(
             if not isinstance(exposed_skills, list) or not all(
                 isinstance(name, str) and name.strip() for name in exposed_skills
             ):
-                raise ValueError("EXPOSED_SKILLS must be a JSON array of skill names")
+                raise ValueError("EXPOSED_SKILLS 必须为技能名称的 JSON 数组")
             params["exposed_skills"] = json_text(exposed_skills)
         result = get_json(
             "/search_skills",

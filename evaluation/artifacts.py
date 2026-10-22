@@ -1,4 +1,4 @@
-"""Incremental JSON artifacts and explicit aggregation denominators."""
+"""增量写入 JSON 产物，并明确统计汇总的分母。"""
 
 from collections import Counter
 from statistics import mean

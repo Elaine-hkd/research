@@ -1,4 +1,4 @@
-"""Locally defined thought and completion tools, without SDK default tools."""
+"""本地定义的思考和完成工具，不使用 SDK 默认工具。"""
 
 from typing import ClassVar
 
@@ -16,12 +16,12 @@ class LocalFinishAction(Action):
 
 
 class ControlObservation(Observation):
-    """Concrete schema for the SDK's observation discriminator."""
+    """供 SDK 观察结果判别器使用的具体模式。"""
 
 
 class ThinkExecutor(ToolExecutor[LocalThinkAction, ControlObservation]):
     def __call__(self, action: LocalThinkAction, conversation=None) -> ControlObservation:
-        return ControlObservation.from_text("Thought recorded.")
+        return ControlObservation.from_text("已记录思考。")
 
 
 class FinishExecutor(ToolExecutor[LocalFinishAction, ControlObservation]):
@@ -42,8 +42,8 @@ class LocalThinkTool(ToolDefinition[LocalThinkAction, ControlObservation]):
 
 
 class LocalFinishTool(ToolDefinition[LocalFinishAction, ControlObservation]):
-    # SDK 1.53.0 ends an action batch by tool name. Keep this name so the SDK
-    # handles completion; the executor does not mutate conversation state.
+    # SDK 1.53.0 根据工具名称结束动作批次。保留此名称，由 SDK
+    # 处理完成状态；执行器不修改会话状态。
     name: ClassVar[str] = "finish"
 
     @classmethod

@@ -7,7 +7,7 @@ from typing import Mapping, Protocol, Sequence
 
 
 class ExecutionError(RuntimeError):
-    """A resource could not start, or its execution result is unavailable."""
+    """资源无法启动，或无法取得执行结果。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +37,9 @@ class ResourceExecutor(Protocol):
 
 def checked_timeout(value: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("timeout must be a positive finite number")
+        raise ValueError("timeout 必须为有限正数")
     if not math.isfinite(value) or value <= 0:
-        raise ValueError("timeout must be a positive finite number")
+        raise ValueError("timeout 必须为有限正数")
     return float(value)
 
 
@@ -48,7 +48,7 @@ def checked_env(env: Mapping[str, str] | None) -> dict[str, str]:
     for key, value in result.items():
         if (not isinstance(key, str) or not key or "=" in key or "\0" in key
                 or not isinstance(value, str) or "\0" in value):
-            raise ValueError("env must contain valid string names and values")
+            raise ValueError("env 必须包含有效的字符串名称和值")
     return result
 
 
@@ -58,17 +58,17 @@ def request_payload(
     python_executable: str, bash_executable: str, env: Mapping[str, str],
 ) -> dict:
     if not isinstance(skill_name, str) or not skill_name.strip():
-        raise ValueError("skill_name must be a non-empty string")
+        raise ValueError("skill_name 必须为非空字符串")
     if not isinstance(relative_path, str) or not relative_path.strip():
-        raise ValueError("relative_path must be a non-empty string")
+        raise ValueError("relative_path 必须为非空字符串")
     path = relative_path.replace("\\", "/")
     if ("\0" in path or PurePosixPath(path).is_absolute()
             or PureWindowsPath(path).drive or ".." in PurePosixPath(path).parts):
-        raise ValueError("relative_path must stay within the skill directory")
+        raise ValueError("relative_path 必须位于技能目录内")
     if isinstance(arguments, (str, bytes)) or not isinstance(arguments, Sequence):
-        raise ValueError("arguments must be a sequence of strings")
+        raise ValueError("arguments 必须为字符串序列")
     if any(not isinstance(arg, str) or "\0" in arg for arg in arguments):
-        raise ValueError("arguments must contain strings without NUL characters")
+        raise ValueError("arguments 中的字符串不能包含 NUL 字符")
     return {
         "relative_path": path,
         "arguments": list(arguments), "timeout": checked_timeout(timeout),

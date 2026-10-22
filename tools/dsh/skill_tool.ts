@@ -13,24 +13,24 @@ export function apply(ctx: Context) {
     if (!Array.isArray(selected) ||
         !selected.every((tool) => typeof tool === 'string' && supported.includes(tool)) ||
         new Set(selected).size !== selected.length) {
-        throw new Error('HARNESS_TOOLS must contain distinct supported tool names')
+        throw new Error('HARNESS_TOOLS 必须包含互不重复且受支持的工具名称')
     }
     if (selected.length === 0) return
 
     const bridge = process.env.HARNESS_BRIDGE_URL
     const token = process.env.HARNESS_BRIDGE_TOKEN
     const base = process.env.SKILL_REGISTRY_URL
-    if (bridge && !token) throw new Error('Missing HARNESS_BRIDGE_TOKEN')
+    if (bridge && !token) throw new Error('缺少 HARNESS_BRIDGE_TOKEN')
     if (!bridge && selected.some((tool) => !registryTools.includes(tool))) {
-        throw new Error('dsh terminal/file tools require a bound task environment')
+        throw new Error('dsh 终端和文件工具需要绑定任务环境')
     }
-    if (!bridge && !base) throw new Error('Missing SKILL_REGISTRY_URL')
-    // Standalone calls retain registry-server execution. Trial calls use the
-    // Python environment's RegistryClient, including its task-specific scope.
+    if (!bridge && !base) throw new Error('缺少 SKILL_REGISTRY_URL')
+    // 独立调用仍在注册中心服务端执行；试验调用使用
+    // Python 环境的 RegistryClient，并遵循本任务的技能范围限制。
     const exposedSkills = JSON.parse(process.env.EXPOSED_SKILLS ?? '[]')
     if (!Array.isArray(exposedSkills) ||
         !exposedSkills.every((skill) => typeof skill === 'string' && skill.trim().length > 0)) {
-        throw new Error('EXPOSED_SKILLS must be a JSON array of skill names')
+        throw new Error('EXPOSED_SKILLS 必须为技能名称的 JSON 数组')
     }
 
     function describeError(error: any, seen = new Set<any>()): any {
@@ -52,8 +52,8 @@ export function apply(ctx: Context) {
         try {
             return await invokeRequest(tool, args, requestSignal)
         } catch (error) {
-            // dsh may only serialize Error.message, so include the cause chain
-            // and the actual request signal's reason in that message too.
+            // dsh 可能仅序列化 Error.message，因此也将异常原因链
+            // 和实际请求取消信号的原因包含在该消息中。
             const details = {
                 tool, error: describeError(error), aborted: requestSignal.aborted,
                 abort_reason: requestSignal.aborted ? describeError(requestSignal.reason) : null,
@@ -72,11 +72,11 @@ export function apply(ctx: Context) {
             })
             const result = await response.json()
             if (!response.ok) {
-                const message = result.error ?? `Tool bridge HTTP ${response.status}`
+                const message = result.error ?? `工具桥接接口 HTTP ${response.status}`
                 throw new Error(message + (result.traceback ? '\n' + result.traceback : ''))
             }
             if (typeof result.text !== 'string' || typeof result.is_error !== 'boolean') {
-                throw new Error('Invalid tool bridge response')
+                throw new Error('工具桥接接口响应无效')
             }
             if (result.is_error) throw new Error(result.text)
             return result.text
@@ -85,10 +85,10 @@ export function apply(ctx: Context) {
         const url = new URL('/' + tool, base)
         if (tool === 'execute_resource') {
             if (!args.skill_name.trim() || !args.relative_path.trim()) {
-                throw new Error('skill_name and relative_path must not be empty')
+                throw new Error('skill_name 和 relative_path 不能为空')
             }
             if (args.timeout != null && (!Number.isFinite(args.timeout) || args.timeout <= 0)) {
-                throw new Error('timeout must be a positive finite number')
+                throw new Error('timeout 必须为有限正数')
             }
             const response = await fetch(url, {
                 method: 'POST',
@@ -101,7 +101,7 @@ export function apply(ctx: Context) {
                 signal,
             })
             const result = await response.text()
-            if (!response.ok) throw new Error(`execute_resource HTTP ${response.status}: ${result}`)
+            if (!response.ok) throw new Error(`execute_resource 请求失败，HTTP ${response.status}: ${result}`)
             return result
         }
         if (tool === 'search_skills') {
@@ -114,10 +114,10 @@ export function apply(ctx: Context) {
         const response = await fetch(url, { signal })
         if (tool === 'search_skills') {
             const result = await response.text()
-            if (!response.ok) throw new Error(`search_skills HTTP ${response.status}: ${result}`)
+            if (!response.ok) throw new Error(`search_skills 请求失败，HTTP ${response.status}: ${result}`)
             return result
         }
-        if (!response.ok) throw new Error(`Registry HTTP ${response.status}`)
+        if (!response.ok) throw new Error(`注册中心请求失败，HTTP ${response.status}`)
         return JSON.stringify(await response.json())
     }
 

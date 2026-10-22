@@ -1,4 +1,4 @@
-"""Text file tools implemented in the current task container, never on the host."""
+"""在当前任务容器内实现文本文件工具，不在宿主机上操作。"""
 
 from typing import ClassVar
 
@@ -29,19 +29,19 @@ class ReplaceTextAction(Action):
 
 
 class FileObservation(Observation):
-    """Command result rendered with the same limits as the shell tool."""
+    """使用与 shell 工具相同的限制显示命令结果。"""
 
 
 class FileExecutor(ToolExecutor):
     def __init__(self, channel, operation: str):
         if channel is None:
-            raise ValueError(f"{operation} requires a bound task environment")
+            raise ValueError(f"{operation} 需要绑定任务环境")
         self.channel = channel
         self.operation = operation
 
     def __call__(self, action, conversation=None) -> FileObservation:
         arguments = action.model_dump(mode="json")
-        # JSON is data in argv, never executable source or shell interpolation.
+        # JSON 仅作为 argv 中的数据，不作为可执行源码或 shell 插值。
         command = file_command(self.operation, arguments)
         observation = self.channel.run_command(
             ShellAction(command=command, timeout_sec=self.channel.timeout),
@@ -50,7 +50,7 @@ class FileExecutor(ToolExecutor):
         return FileObservation.from_text(observation.text, is_error=observation.is_error)
 
     def interrupt(self) -> None:
-        # A file-only tool set still needs to cancel the shared environment I/O.
+        # 仅含文件操作的工具集也需要取消共用的环境 I/O。
         self.channel.interrupt()
 
     def close(self) -> None:

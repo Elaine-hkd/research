@@ -1,4 +1,4 @@
-"""Reconstruct a native task package from the existing split research index."""
+"""根据现有拆分的 research 索引重建原生任务包。"""
 
 import json
 from pathlib import Path
@@ -11,19 +11,19 @@ _PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 _APT_MIRROR_MARKER = "# research: APT mirror (TUNA)"
 _APT_MIRROR_COMMAND = r"""
 if [ ! -f /etc/os-release ]; then
-    echo 'research: APT mirror skipped (no /etc/os-release)'
+    echo 'research：已跳过 APT 镜像源配置（缺少 /etc/os-release）'
     exit 0
 fi
 . /etc/os-release
 case "$ID" in
     ubuntu|debian) ;;
-    *) echo "research: APT mirror skipped ($ID)"; exit 0 ;;
+    *) echo "research：已跳过 APT 镜像源配置（$ID）"; exit 0 ;;
 esac
 if [ "$(id -u)" -ne 0 ]; then
-    echo 'research: APT mirror requires root before the first RUN' >&2
+    echo 'research：配置 APT 镜像源需要在首个 RUN 前取得 root 权限' >&2
     exit 1
 fi
-# HTTP also works in minimal images without ca-certificates; APT signatures stay enabled.
+# HTTP 也适用于未安装 ca-certificates 的最小镜像；APT 签名校验保持启用。
 for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     [ -f "$source" ] || continue
     sed -E -i \
@@ -34,12 +34,12 @@ for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sour
         -e 's@https?://(deb\.debian\.org|ftp\.([[:alnum:]-]+\.)?debian\.org)/debian(/|[[:space:]]|$)@http://mirrors.tuna.tsinghua.edu.cn/debian\3@g' \
         "$source"
 done
-echo "research: APT mirror configured for $ID (TUNA)"
+echo "research：已为 $ID 配置 APT 清华镜像源（TUNA）"
 """.strip()
 
 
 def _inject_package_mirrors(dockerfile: Path) -> None:
-    """Set pip after FROM and prepare APT before each stage's first RUN."""
+    """在 FROM 后设置 pip，并在每个阶段的首个 RUN 前准备 APT。"""
     text = dockerfile.read_text(encoding="utf-8-sig")
     inject_pip = _PIP_MIRROR_MARKER not in text
     inject_apt = _APT_MIRROR_MARKER not in text
@@ -63,7 +63,7 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
             if directive:
                 escape = directive[1]
             continue
-        # Consume a whole instruction so continuation lines are never instructions.
+        # 每次读取完整指令，避免将续行误判为新指令。
         while line.rstrip("\r\n").endswith(escape) and i < len(lines):
             line = lines[i]
             i += 1
@@ -83,7 +83,7 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
         elif keyword == "RUN" and pending_stage:
             insertions[start] = insertions.get(start, "") + apt_block
             pending_stage = False
-        # A heredoc may contain FROM/RUN as data, including embedded Python imports.
+        # heredoc 中可能包含作为数据的 FROM/RUN，也可能嵌入 Python 导入代码。
         if keyword in {"RUN", "COPY"}:
             command = "".join(lines[start:i])
             for heredoc in re.finditer(r"<<(-?)[ \t]*(?:'([^']+)'|\"([^\"]+)\"|([a-zA-Z_][a-zA-Z0-9_]*))", command):
@@ -94,8 +94,8 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
                     if (body.lstrip("\t") if heredoc[1] else body) == delimiter:
                         break
                 else:
-                    raise ValueError(f"Unclosed Dockerfile heredoc {delimiter!r}: {dockerfile}")
-    # A final stage without RUN can still receive the desktop installer afterwards.
+                    raise ValueError(f"Dockerfile 的 heredoc 未闭合：{delimiter!r}: {dockerfile}")
+    # 没有 RUN 的最终阶段也可能在后续添加桌面安装命令。
     if pending_stage:
         insertions[len(lines)] = insertions.get(len(lines), "") + apt_block
     if insertions:
@@ -106,7 +106,7 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
 
 
 def _native_task_text(source: Path) -> str:
-    """Rename the legacy sandbox key in YAML; keep the Markdown body intact."""
+    """重命名 YAML 中旧版沙箱配置键，保留 Markdown 正文。"""
     import yaml
 
     text = source.read_text(encoding="utf-8-sig")
@@ -116,14 +116,14 @@ def _native_task_text(source: Path) -> str:
     end = next((i for i, line in enumerate(lines[1:], 1)
                 if line.strip() == "---"), None)
     if end is None:
-        raise ValueError(f"Task YAML frontmatter is not closed: {source}")
+        raise ValueError(f"任务的 YAML 前置元数据未闭合：{source}")
     config = yaml.safe_load("".join(lines[1:end]))
     if not isinstance(config, dict):
-        raise ValueError(f"Task YAML frontmatter must be a mapping: {source}")
+        raise ValueError(f"任务的 YAML 前置元数据必须为映射：{source}")
     if "environment" not in config:
         return text
     if "sandbox" in config:
-        raise ValueError(f"Task declares both environment and sandbox: {source}")
+        raise ValueError(f"任务同时声明了 environment 和 sandbox：{source}")
     config["sandbox"] = config.pop("environment")
     header = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
     return "---\n" + header + "---\n" + "".join(lines[end + 1:])
@@ -131,22 +131,22 @@ def _native_task_text(source: Path) -> str:
 
 def materialize_skillsbench_task(index_path: str | Path, task_id: str,
                                 destination: str | Path) -> Path:
-    """Copy task data to a new persistent staging directory; never edit originals.
+    """将任务数据复制到新的持久准备目录，不修改原始数据。
 
-    Caller owns the staging directory. No environment is started here.
-    Absolute index paths are preserved; relative paths resolve beside the index.
-    Only the staged task.md renames environment to sandbox for BenchFlow 0.7.8.
-    Staged Dockerfile* files use TUNA for pip and official Ubuntu/Debian APT sources.
+    准备目录由调用方管理；此处不启动环境。
+    保留索引中的绝对路径，相对路径以索引所在目录为基准解析。
+    仅在副本 task.md 中将 environment 改名为 sandbox，以适配 BenchFlow 0.7.8。
+    副本中的 Dockerfile* 将 pip 和官方 Ubuntu/Debian APT 源切换为清华镜像。
     """
     index_path = Path(index_path).resolve(strict=True)
     rows = json.loads(index_path.read_text(encoding="utf-8-sig"))["tasks"]
     matches = [row for row in rows if row["id"] == task_id]
     if len(matches) != 1:
-        raise ValueError(f"Expected one task named {task_id!r}, found {len(matches)}")
+        raise ValueError(f"应有一个名称为 {task_id!r} 的任务，实际找到 {len(matches)}")
     row = matches[0]
     destination = Path(destination).resolve()
     if destination.exists():
-        raise FileExistsError(f"Staging destination already exists: {destination}")
+        raise FileExistsError(f"准备目录已存在：{destination}")
     entries = [(row["task_file"], "task.md"),
                (row["environment_dir"], "environment"),
                (row["verifiler_dir"], "verifier"),
@@ -156,19 +156,19 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     checked = []
     for path, name in entries:
         if name.casefold() in names or name in {"", ".", ".."}:
-            raise ValueError(f"Conflicting staged path: {name}")
+            raise ValueError(f"准备路径冲突：{name}")
         names.add(name.casefold())
         source = Path(path)
         source = source if source.is_absolute() else index_path.parent / source
         if source.is_symlink() or source.is_junction():
-            raise ValueError(f"Linked task resources are unsupported: {source}")
+            raise ValueError(f"不支持链接形式的任务资源：{source}")
         source = source.resolve(strict=True)
         if source == destination or source in destination.parents or destination in source.parents:
-            raise ValueError("Staging destination overlaps task sources")
+            raise ValueError("准备目录与任务源目录重叠")
         if source.is_dir():
             for item in source.rglob("*"):
                 if item.is_symlink() or item.is_junction():
-                    raise ValueError(f"Linked task resources are unsupported: {item}")
+                    raise ValueError(f"不支持链接形式的任务资源：{item}")
         checked.append((source, name))
     task_text = _native_task_text(checked[0][0])
     destination.mkdir(parents=True)

@@ -1,4 +1,4 @@
-"""A local execution session; never shuts down or deletes the host machine."""
+"""本地执行会话，不关闭或删除宿主机。"""
 
 import asyncio
 import os
@@ -14,8 +14,8 @@ from .executor._worker import run_command, run_resource
 
 
 async def _finish_thread_on_cancel(function, *args):
-    # A cancelled to_thread does not stop its subprocess. Keep the session lock
-    # until the worker finishes (bounded by its process timeout).
+    # 取消 to_thread 不会停止其子进程，需持续持有会话锁，
+    # 直到工作进程结束（受进程超时限制）。
     job = asyncio.create_task(asyncio.to_thread(function, *args))
     try:
         return await asyncio.shield(job)
@@ -49,16 +49,16 @@ class LocalEnvironment:
 
     def _require_running(self):
         if self.state != "running":
-            raise EnvironmentError(f"Local environment is not running: {self.state}")
+            raise EnvironmentError(f"本地环境未运行：{self.state}")
 
     async def start(self):
         async with self._lock:
             if self.state == "running":
                 return
             if self.state != "new":
-                raise EnvironmentError("Create a new LocalEnvironment after destruction")
+                raise EnvironmentError("销毁后请创建新的 LocalEnvironment")
             if not self.workdir.is_dir():
-                raise FileNotFoundError(f"Working directory does not exist: {self.workdir}")
+                raise FileNotFoundError(f"工作目录不存在：{self.workdir}")
             self.state = "running"
 
     async def wait_ready(self, timeout=30):
@@ -74,16 +74,16 @@ class LocalEnvironment:
             try:
                 return await _finish_thread_on_cancel(run_resource, payload)
             except (OSError, ValueError, RuntimeError) as exc:
-                raise ExecutionError(f"Local skill execution failed: {exc}") from exc
+                raise ExecutionError(f"本地技能执行失败：{exc}") from exc
 
     async def execute(self, argv, *, cwd=None, timeout=60, service="main"):
         if service != "main":
-            raise ValueError("LocalEnvironment has only the main service")
+            raise ValueError("LocalEnvironment 仅提供 main 服务")
         if (isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence) or not argv
                 or any(not isinstance(a, str) or "\0" in a for a in argv) or not argv[0]):
-            raise ValueError("argv must be a non-empty sequence of strings")
+            raise ValueError("argv 必须为非空字符串序列")
         if os.name == "nt" and Path(argv[0]).suffix.lower() in {".bat", ".cmd"}:
-            raise ValueError("Windows batch files are unsupported; use Python instead")
+            raise ValueError("不支持 Windows 批处理文件，请使用 Python")
         timeout = checked_timeout(timeout)
         directory = Path(cwd).resolve() if cwd is not None else self.workdir
         values = {**os.environ, **self._env, "PYTHONIOENCODING": "utf-8"}
@@ -102,7 +102,7 @@ class LocalEnvironment:
                 return
             if source.is_dir():
                 if source in destination.parents or destination in source.parents:
-                    raise ValueError("Directory copy source and destination overlap")
+                    raise ValueError("目录复制的源和目标重叠")
                 shutil.copytree(source, destination, dirs_exist_ok=True)
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +110,7 @@ class LocalEnvironment:
 
     async def download(self, source, destination, *, directory=False):
         if Path(source).is_dir() != directory:
-            raise ValueError("directory flag must match the source type")
+            raise ValueError("directory 标志必须与源类型一致")
         await self.upload(source, destination)
 
     async def destroy(self):

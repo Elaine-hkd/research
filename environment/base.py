@@ -10,7 +10,7 @@ class EnvironmentError(RuntimeError):
 
 @dataclass(frozen=True)
 class CommandResult:
-    """A completed command attempt; a timeout is a result after safe cleanup."""
+    """一次已结束的命令执行；只有安全清理后，超时才可作为结果返回。"""
 
     exit_code: int | None
     stdout: str

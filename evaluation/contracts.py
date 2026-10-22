@@ -1,4 +1,4 @@
-"""Data passed between the dataset, agent and evaluator functions."""
+"""在数据集、智能体和评分函数之间传递的数据。"""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +21,7 @@ class Task:
 class PreparedTask:
     task_dir: Path
     skills_dir: Path | None = None
-    # Only descriptions and container paths; full instructions stay in files.
+    # 仅包含描述和容器路径，完整指令保留在文件中。
     skill_catalog: list[dict[str, str]] = field(default_factory=list)
 
 

@@ -1,4 +1,4 @@
-"""OpenHands-specific class imports and SDK registration for shared tool names."""
+"""为共用工具名称导入 OpenHands 专用类并完成 SDK 注册。"""
 
 from importlib import import_module
 from uuid import uuid4
@@ -23,40 +23,40 @@ TOOL_CLASSES = {
 
 
 def create_tools(selected: list[str], *, executor=None) -> tuple[list[Tool], set[str]]:
-    """Each class implements create(conv_state=None, *, executor=None, **params).
+    """每个类实现 create(conv_state=None, *, executor=None, **params)。
 
-    executor is the current environment's command channel, or None for tools
-    that do not use an environment. Only configured classes are imported.
+    executor 是当前环境的命令通道；不使用环境的工具可传 None。
+    仅导入配置中指定的类。
     """
     if unknown := set(selected) - TOOL_CLASSES.keys():
-        raise ValueError(f"No OpenHands tool implementation for: {sorted(unknown)}")
+        raise ValueError(f"以下工具没有 OpenHands 实现：{sorted(unknown)}")
     registry = None
     if executor is not None and set(selected).intersection(REGISTRY_TOOLS):
         registry = executor.environment.executor.registry
         if registry is None:
-            raise ValueError("Registry tools with an environment require its registry_url")
+            raise ValueError("环境中的注册中心工具需要配置环境的 registry_url")
     specs, names = [], set()
     for name in selected:
         reference = TOOL_CLASSES[name]
         module, separator, attribute = reference.partition(":")
         if not separator or not module or not attribute:
-            raise ValueError(f"Expected module:Class, received {reference!r}")
+            raise ValueError(f"需要 module:Class 格式，实际收到 {reference!r}")
         tool_class = getattr(import_module(module), attribute)
         if not isinstance(tool_class, type) or not issubclass(tool_class, ToolDefinition):
-            raise TypeError(f"Configured tool must be a ToolDefinition subclass: {reference}")
+            raise TypeError(f"配置的工具必须为 ToolDefinition 子类：{reference}")
         bindings = {"executor": executor}
         if name in REGISTRY_TOOLS:
             bindings["registry"] = registry
         definitions = tool_class.create(conv_state=None, **bindings)
         if not definitions:
-            raise ValueError(f"Configured tool created no definitions: {reference}")
+            raise ValueError(f"配置的工具未创建任何定义：{reference}")
         for definition in definitions:
             if not isinstance(definition, ToolDefinition) or definition.executor is None:
-                raise TypeError(f"Tool must have a definition and an executor: {reference}")
+                raise TypeError(f"工具必须包含定义和执行器：{reference}")
             if definition.name in names:
-                raise ValueError(f"Duplicate model-visible tool name: {definition.name}")
+                raise ValueError(f"模型可见工具名称重复：{definition.name}")
             names.add(definition.name)
-            # Never overwrite another trial's binding in the SDK global registry.
+            # 不得覆盖 SDK 全局注册表中其他试验的绑定。
             binding = "custom_" + uuid4().hex
             register_tool(binding, definition)
             specs.append(Tool(name=binding))

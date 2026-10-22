@@ -1,4 +1,4 @@
-"""One authenticated loopback tool endpoint owned by a single dsh trial."""
+"""由单次 dsh 试验持有、经过身份验证的本机回环工具端点。"""
 
 import asyncio
 from dataclasses import asdict
@@ -18,7 +18,7 @@ class _Arguments(BaseModel):
 
 class _SearchArguments(_Arguments):
     query: str = ""
-    # Retained for the existing OpenHands schema; the task owns the real scope.
+    # 保留字段以兼容现有 OpenHands 模式，实际技能范围由任务决定。
     exposed_skills: list[str] | None = None
 
 
@@ -66,20 +66,20 @@ ARGUMENTS = {
 
 
 class ToolBridge:
-    """Serialize tools on the environment's event loop; never own its lifecycle.
+    """在环境事件循环中串行执行工具，不管理环境生命周期。
 
-    A disconnected HTTP request cancels its operation. close() stops accepting
-    requests and joins their cancellation before the evaluator destroys Docker.
+    HTTP 请求断开时会取消对应操作。close() 停止接受请求，
+    并等待取消完成后，再由评分流程销毁 Docker。
     """
 
     def __init__(self, operations: EnvironmentOperations, tools):
         self.operations = operations
         self.tools = frozenset(validate_tools(tools))
         if unknown := self.tools - ARGUMENTS.keys():
-            raise ValueError(f"No dsh tool implementation for: {sorted(unknown)}")
+            raise ValueError(f"以下工具没有 dsh 实现：{sorted(unknown)}")
         self.registry = operations.environment.executor.registry
         if self.tools.intersection(REGISTRY_TOOLS) and self.registry is None:
-            raise ValueError("Registry tools with an environment require its registry_url")
+            raise ValueError("环境中的注册中心工具需要配置环境的 registry_url")
         self.token = secrets.token_urlsafe(32)
         self.url = None
         self.failure = None
@@ -91,7 +91,7 @@ class ToolBridge:
 
     async def start(self) -> None:
         if self._closed or self._server is not None:
-            raise RuntimeError("Tool bridge cannot be started twice")
+            raise RuntimeError("工具桥接接口不能重复启动")
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
         port = self._server.sockets[0].getsockname()[1]
         self.url = f"http://127.0.0.1:{port}/call"
@@ -103,15 +103,15 @@ class ToolBridge:
 
     async def wait_failed(self) -> None:
         await self._failed.wait()
-        raise RuntimeError("dsh task tool channel failed") from self.failure
+        raise RuntimeError("dsh 任务工具通道失败") from self.failure
 
     async def _call(self, name: str, arguments: dict) -> OperationResult:
         if name not in self.tools:
-            raise ValueError(f"Tool is not enabled for this trial: {name!r}")
+            raise ValueError(f"本次试验未启用该工具：{name!r}")
         arguments = ARGUMENTS[name].model_validate(arguments).model_dump(mode="json")
         async with self._lock:
             if self._closed or self.failure is not None:
-                raise RuntimeError("Tool bridge is closed or failed")
+                raise RuntimeError("工具桥接接口已关闭或失败")
             if name == "terminal":
                 return await self.operations.run_command(**arguments)
             if name in {"read_file", "write_file"}:
@@ -124,8 +124,8 @@ class ToolBridge:
                 params = {"skill_name": arguments["name"]}
                 if name == "load_resource":
                     params["relative_path"] = arguments["relative_path"]
-            # request() keeps the original registry JSON envelope and enforces
-            # the exact allowed set already installed by dataset setup.
+            # request() 保留注册中心原始 JSON 响应结构，并严格执行
+            # 数据集设置阶段已确定的允许访问集合。
             envelope = await asyncio.to_thread(self.registry.request, "/" + name, params)
             return OperationResult(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")))
 
@@ -140,7 +140,7 @@ class ToolBridge:
                 header = (await reader.readuntil(b"\r\n\r\n")).decode("ascii")
                 request_line, *header_lines = header.split("\r\n")
                 if request_line != "POST /call HTTP/1.1":
-                    raise ValueError("Expected POST /call HTTP/1.1")
+                    raise ValueError("请求必须为 POST /call HTTP/1.1")
                 headers = {}
                 for line in header_lines:
                     if not line:
@@ -148,30 +148,30 @@ class ToolBridge:
                     key, separator, value = line.partition(":")
                     key = key.strip().lower()
                     if not separator or key in headers:
-                        raise ValueError("Invalid or duplicate HTTP header")
+                        raise ValueError("HTTP 请求头无效或重复")
                     headers[key] = value.strip()
                 if not secrets.compare_digest(headers.get("authorization", ""), "Bearer " + self.token):
-                    await self._respond(writer, 403, {"error": "Invalid bridge credential"})
+                    await self._respond(writer, 403, {"error": "桥接接口凭据无效"})
                     return
                 if ("transfer-encoding" in headers
                         or headers.get("content-type", "").split(";")[0] != "application/json"):
-                    raise ValueError("Expected a Content-Length JSON request")
+                    raise ValueError("需要带 Content-Length 的 JSON 请求")
                 length = int(headers.get("content-length", "0"))
                 if not 0 < length <= 8 * 1024 * 1024:
-                    raise ValueError("Tool request must contain between 1 byte and 8 MiB")
+                    raise ValueError("工具请求大小必须在 1 字节到 8 MiB 之间")
                 payload = json.loads(await reader.readexactly(length))
                 if (not isinstance(payload, dict) or set(payload) != {"name", "arguments"}
                         or not isinstance(payload["name"], str)
                         or not isinstance(payload["arguments"], dict)):
-                    raise ValueError("Expected a tool name and arguments object")
+                    raise ValueError("需要工具名称及参数对象")
             operation = asyncio.create_task(self._call(payload["name"], payload["arguments"]))
             disconnected = asyncio.create_task(reader.read(1))
             done, _ = await asyncio.wait([operation, disconnected], return_when=asyncio.FIRST_COMPLETED)
             if operation not in done:
                 self.fail(ConnectionError(
-                    f"dsh client disconnected during {payload['name']}; cancelling its environment operation"
+                    f"dsh 客户端在执行工具时断开连接：{payload['name']}；正在取消对应的环境操作"
                 ))
-                return  # The finally block cancels and joins the abandoned call.
+                return  # finally 块会取消并等待这个已放弃的调用结束。
             result = await operation
             await self._respond(writer, 200, asdict(result))
         except ValueError as exc:
@@ -181,7 +181,7 @@ class ToolBridge:
             else:
                 await self._respond(writer, 400, self._error_details(exc))
         except (ConnectionError, asyncio.IncompleteReadError) as exc:
-            # Distinguish backend transport errors from a client disconnect.
+            # 区分后端传输错误与客户端断开连接。
             if (operation is not None and operation.done() and not operation.cancelled()
                     and operation.exception() is exc):
                 self.fail(exc)
@@ -221,7 +221,7 @@ class ToolBridge:
             writer.write(header.encode("ascii") + body)
             await writer.drain()
         except ConnectionError:
-            pass  # A completed call can race with the client's cancellation.
+            pass  # 调用完成可能与客户端取消同时发生。
 
     async def close(self) -> None:
         self._closed = True

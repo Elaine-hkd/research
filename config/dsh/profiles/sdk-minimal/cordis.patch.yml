@@ -1,4 +1,4 @@
-# Your patch layer for this dsh profile, applied after every bundle layer:
-# a top-level YAML array of loader patch entries (id-targeted config
-# overrides, disables, and insert lists; `!!js` expressions allowed).
+# 此 dsh 配置的补丁层，在所有配置包层之后应用：
+# 顶层为加载器补丁条目数组，按 id 定位并覆盖配置，
+# 支持禁用、插入列表及 `!!js` 表达式。
 []

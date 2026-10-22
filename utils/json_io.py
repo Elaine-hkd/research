@@ -1,4 +1,4 @@
-"""JSON artifact I/O shared by harnesses and evaluation."""
+"""harness 与评估流程共用的 JSON 产物读写。"""
 
 import json
 from pathlib import Path
@@ -21,7 +21,7 @@ def append_jsonl(path: Path, value) -> None:
 
 
 def redact(value, secret: str):
-    """Redact values before JSON encoding, including keys with JSON escapes."""
+    """在 JSON 编码前对值脱敏，包括含 JSON 转义的键。"""
     if isinstance(value, str):
         return value.replace(secret, "[REDACTED]")
     if isinstance(value, list):

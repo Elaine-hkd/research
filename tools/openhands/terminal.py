@@ -1,4 +1,4 @@
-"""Shared synchronous bridge for shell, file and skill operations in an environment."""
+"""环境中 shell、文件和技能操作共用的同步桥接接口。"""
 
 import asyncio
 from pathlib import Path
@@ -19,7 +19,7 @@ class ShellAction(Action):
 
 
 class ShellObservation(Observation):
-    """Concrete output schema required by the SDK's kind discriminator."""
+    """SDK 的 kind 判别器所需的具体输出模式。"""
 
 
 class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
@@ -82,11 +82,11 @@ class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
         )
 
     def _submit(self, action, conversation, *, tool_name, arguments, resource=False):
-        # OpenHands arun dispatches tools on worker threads. Schedule Docker I/O
-        # back on the original loop; running asyncio.run here would break locks.
+        # OpenHands 的 arun 在线程中分发工具，需将 Docker I/O
+        # 调度回原事件循环；此处使用 asyncio.run 会破坏锁的约束。
         with self._guard:
             if self._closed:
-                raise RuntimeError("Environment execution channel is closed")
+                raise RuntimeError("环境执行通道已关闭")
             self._idle.clear()
             future = asyncio.run_coroutine_threadsafe(
                 self._execute(action, tool_name, arguments, resource=resource),
@@ -115,7 +115,7 @@ class ShellExecutor(ToolExecutor[ShellAction, ShellObservation]):
 
     async def drain(self) -> None:
         self.interrupt()
-        await asyncio.sleep(0)  # Deliver cancellation before checking active I/O.
+        await asyncio.sleep(0)  # 检查进行中的 I/O 前，先传递取消信号。
         if self._tasks:
             await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
         await asyncio.to_thread(self._idle.wait)

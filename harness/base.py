@@ -1,4 +1,4 @@
-"""Result shared by harness implementations and their callers."""
+"""harness 实现及其调用方共用的结果类型。"""
 
 from dataclasses import dataclass, field
 import json
@@ -21,6 +21,6 @@ class AgentResult:
     finish_reason: str
     tool_calls: int | None = 0
     usage: dict[str, Any] = field(default_factory=dict)
-    # Absolute path for standalone callers; evaluation also accepts a path
-    # relative to the trial directory and stores a portable relative reference.
+    # 独立调用方使用绝对路径；评估流程也接受相对于试验目录的路径，
+    # 并保存为可迁移的相对引用。
     trace_path: str | None = None

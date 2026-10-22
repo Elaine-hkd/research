@@ -19,7 +19,7 @@ trap cleanup EXIT
 trap 'exit 0' TERM INT
 
 if [[ "$(id -u)" != 0 ]]; then
-    echo '[desktop] This desktop configuration requires root.' >&2
+    echo '[桌面] 此桌面配置需要 root 权限。' >&2
     exit 1
 fi
 mkdir -p "$XDG_RUNTIME_DIR" /root/Desktop
@@ -29,13 +29,13 @@ touch "$XAUTHORITY"
 Xvfb "$DISPLAY" -screen 0 1280x800x24 -ac -nolisten tcp &
 pids+=("$!")
 
-# Xfce and VNC must wait until their shared X server accepts connections.
+# Xfce 和 VNC 必须等待共用的 X 服务器开始接受连接。
 for attempt in {1..100}; do
     if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
         break
     fi
     if ! kill -0 "${pids[0]}" 2>/dev/null; then
-        echo '[desktop] Xvfb exited before becoming ready.' >&2
+        echo '[桌面] Xvfb 在就绪前退出。' >&2
         exit 1
     fi
     sleep 0.1
@@ -51,15 +51,15 @@ pids+=("$!")
 websockify --web=/usr/share/novnc 0.0.0.0:6080 127.0.0.1:5900 &
 pids+=("$!")
 
-# Keep a task's existing command, including any application/server startup.
+# 保留任务已有命令，包括应用或服务的启动命令。
 "$@" &
 pids+=("$!")
 
-echo '[desktop] Xfce/noVNC starting on container port 6080.'
+echo '[桌面] 正在容器端口 6080 上启动 Xfce/noVNC。'
 if wait -n "${pids[@]}"; then
     status=0
 else
     status=$?
 fi
-echo "[desktop] A desktop component or the task command exited (status=$status)." >&2
+echo "[桌面] 某个桌面组件或任务命令已退出（状态=$status）。" >&2
 exit "$status"

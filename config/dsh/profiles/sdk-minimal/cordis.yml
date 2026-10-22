@@ -1,4 +1,4 @@
-# dsh profile root — an empty entry list. The tree is composed as patches:
-# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any
-# --patch overlays. Edit cordis.patch.yml, not this file.
+# dsh 配置根节点，初始条目列表为空。配置树按补丁顺序组合：
+# 先加载 package.json 中 dsh.profile.bundles 的各配置包，再加载 cordis.patch.yml，
+# 最后加载 --patch 覆盖层。请编辑 cordis.patch.yml。
 []
