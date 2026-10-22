@@ -85,7 +85,12 @@ Docker 适配以已检查源码的 benchflow==0.7.8 为准，仅支持其 Linux 
 容器 Python 3.9+，宿主 Python 3.12+；技能依赖由任务镜像提供。注册中心请求只发生在宿主。
 原始命令通道将 stderr 合并至 stdout，但技能脚本由监督进程分别捕获 stdout/stderr。
 Docker 原始命令与技能脚本复用容器内监督进程，每次命令在独立进程组中执行；
-达到执行时限后杀死该组，并限时回收输出和退出状态。原始命令超时仍抛异常，不改变工具上限。
+达到执行时限后杀死该组，并限时回收输出和退出状态。清理成功的命令超时返回
+`CommandResult(exit_code=None, timed_out=True, ...)`，保留已收集的输出，`success=False`，环境仍为 running。
+普通非零退出码同样是工具结果；Docker 传输失败、worker 响应异常或清理未完成才抛异常并标记 failed。
+如果清理后输出管道仍未关闭，不能确认子进程已退出，仍按故障处理。
+DSH 和 OpenHands 的共享工具层将已确认的超时返回为 `TOOL_TIMEOUT`、`recoverable=true` 的工具错误，
+不会设置通道失败或中断会话；模型可继续调用工具。两分钟工具上限不变，总 agent 预算到期仍结束 trial。
 宿主 Docker CLI 另留 transport_grace（默认30秒）供回传和清理；超时或取消时，
 Windows 使用 taskkill /T /F 回收本次 CLI 及 Compose 插件，其他宿主回收该 CLI 进程组。
 所有退出与输出等待都有清理边界；连接中断时还会通过独立调用停止容器内对应命令组。
@@ -108,6 +113,10 @@ SKILL.md 保存正文，不包含注册中心剥离的 frontmatter；未列出�
 需要保留的输出写入持久 workdir 或指定绝对路径，不写入临时技能目录。
 allowed_skills=None 允许全部技能，[] 禁用全部；registry_url 可省略，此时只能使用原始环境命令和文件操作。
 registry_timeout 是单次 HTTP 超时；default_timeout 是脚本超时（默认300秒）；Docker transport_grace 默认30秒。
+`execute_resource(..., total_timeout=...)` 可让下载与脚本执行共用预算；共享工具层传入当前有效工具预算，
+下载占用的时间从脚本时限中扣除。下载预算耗尽时不启动脚本，并返回可恢复超时。
+容器传输和退出清理保留独立时限，因此调用的墙钟耗时可以超过执行预算；不会由同一计时器抢先取消清理。
+不传 total_timeout 的既有调用仍沿用原来的脚本超时语义。
 实验期间应固定 registry 数据，当前 API 没有版本快照；资源和输出均在内存处理。
 
 ## 现有 SkillsBench 索引

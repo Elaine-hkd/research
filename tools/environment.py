@@ -1,6 +1,5 @@
 """Harness-independent command, file and resource operations in one environment."""
 
-import asyncio
 from collections import Counter
 from dataclasses import asdict, dataclass
 import json
@@ -110,22 +109,27 @@ class EnvironmentOperations:
             append_jsonl(self.log_path, {"type": "call", "index": call_index,
                                        "tool_name": tool_name, "arguments": arguments})
             if resource:
-                # Bound download, transfer and execution together, as OpenHands did.
-                async with asyncio.timeout(timeout):
-                    result = await self.environment.executor.execute_resource(
-                        arguments["skill_name"], arguments["relative_path"],
-                        arguments=arguments.get("arguments", []), timeout=timeout,
-                    )
+                # The executor budgets downloads and script execution, then lets
+                # the worker finish bounded cleanup instead of cancelling it.
+                result = await self.environment.executor.execute_resource(
+                    arguments["skill_name"], arguments["relative_path"],
+                    arguments=arguments.get("arguments", []), timeout=timeout,
+                    total_timeout=timeout,
+                )
                 raw = result.to_dict()
             else:
                 result = await self.environment.execute(
                     ["bash", "-c", command], cwd=cwd, timeout=timeout,
                 )
                 raw = asdict(result)
+            if result.timed_out:
+                raw["error"] = {
+                    "code": "TOOL_TIMEOUT",
+                    "message": f"Tool exceeded its {timeout:g}s budget; execution stopped or was not started",
+                    "recoverable": True,
+                }
             append_jsonl(self.log_path, {"type": "result", "index": call_index,
                                        "tool_name": tool_name, **raw})
-            if resource and result.timed_out:
-                raise TimeoutError(f"Skill resource exceeded its {timeout}s execution budget")
             for field in ("stdout", "stderr"):
                 if len(raw[field]) > self.output_chars:
                     raw[field] = (raw[field][:self.output_chars]

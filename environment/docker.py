@@ -62,9 +62,10 @@ class DockerEnvironment(BenchFlowBackend):
             "operation": "command", "argv": list(argv), "timeout": timeout,
             "workdir": cwd, "python_executable": self._python_executable,
         }, cwd=cwd, service=service)
-        if result["timed_out"]:
-            raise RuntimeError(f"Command timed out after {timeout:g} seconds")
-        return CommandResult(result["exit_code"], result["stdout"], result["stderr"])
+        # The worker has reaped the command and transfer cleanup has succeeded.
+        # A reported timeout does not mean the Docker command channel failed.
+        return CommandResult(result["exit_code"], result["stdout"], result["stderr"],
+                             timed_out=result["timed_out"])
 
     async def _run_worker(self, payload):
         async with self._lock:

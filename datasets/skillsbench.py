@@ -38,6 +38,8 @@ async def setup_environment(context: TrialContext) -> None:
             for skill_name in sorted(registry.allowed):
                 await asyncio.to_thread(registry.load_skill, skill_name)
         exists = await context.environment.execute(["test", "!", "-e", "/skills"])
+        if exists.timed_out:
+            raise TimeoutError("Timed out checking whether the task image contains /skills")
         if not exists.success:
             raise ValueError("Task image already contains /skills; refuse to merge skill sources")
         await context.environment.upload(context.prepared.skills_dir, "/skills")

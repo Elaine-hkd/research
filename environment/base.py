@@ -10,13 +10,16 @@ class EnvironmentError(RuntimeError):
 
 @dataclass(frozen=True)
 class CommandResult:
-    exit_code: int
+    """A completed command attempt; a timeout is a result after safe cleanup."""
+
+    exit_code: int | None
     stdout: str
     stderr: str
+    timed_out: bool = False
 
     @property
     def success(self) -> bool:
-        return self.exit_code == 0
+        return not self.timed_out and self.exit_code == 0
 
 
 class Environment(Protocol):

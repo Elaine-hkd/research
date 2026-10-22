@@ -257,8 +257,8 @@ class BenchFlowBackend:
             try:
                 return await self._execute_command(argv, cwd=cwd, timeout=timeout, service=service)
             except BaseException:
-                # A broken/timed-out exec may leave the command running remotely.
-                # Disallow reuse until the caller has destroyed this environment.
+                # Supervised command timeouts return CommandResult. Exceptions
+                # mean execution/cleanup is unconfirmed; disallow environment reuse.
                 self.state = "failed"
                 raise
 

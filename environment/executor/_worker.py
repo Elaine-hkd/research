@@ -100,12 +100,13 @@ def run_command(command, cwd, env, timeout, *, control_path=None, merge_stderr=F
         try:
             stdout, stderr = process.communicate(timeout=5)
         except subprocess.TimeoutExpired as cleanup_exc:
-            # A detached descendant may still hold a pipe. Do not wait forever.
-            stdout, stderr = cleanup_exc.output or b"", cleanup_exc.stderr or b""
+            # A detached descendant may still hold a pipe. Bounded waiting is
+            # not proof of cleanup, so never report this as a recoverable timeout.
             process.stdout.close()
             if process.stderr is not None:
                 process.stderr.close()
             process.wait(timeout=5)
+            raise RuntimeError("Command output pipes remained open after process cleanup") from cleanup_exc
         if not timed_out:
             raise
     return {

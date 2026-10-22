@@ -90,9 +90,8 @@ class LocalEnvironment:
         async with self._lock:
             self._require_running()
             result = await _finish_thread_on_cancel(run_command, list(argv), directory, values, timeout)
-            if result["timed_out"]:
-                raise TimeoutError("Local command exceeded its timeout")
-            return CommandResult(result["exit_code"], result["stdout"], result["stderr"])
+            return CommandResult(result["exit_code"], result["stdout"], result["stderr"],
+                                 timed_out=result["timed_out"])
 
     async def upload(self, source, destination):
         async with self._lock:

@@ -31,6 +31,7 @@ class ResourceExecutor(Protocol):
     async def execute_resource(
         self, skill_name: str, relative_path: str,
         arguments: Sequence[str] = (), timeout: float | None = None,
+        *, total_timeout: float | None = None,
     ) -> ExecutionResult: ...
 
 
