@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .config import experiment_directory, load_config
-from .dataset import load_tasks
+from .experiment import completed_trial, iter_trials, load_run
 
 
 def main() -> int:
@@ -14,6 +14,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
     parser.add_argument("--name", help="实验名称，覆盖 config.name，支持中文")
     parser.add_argument("--plan", action="store_true", help="仅读取配置和任务，不调用模型或启动 Docker")
+    parser.add_argument("--resume", action="store_true", help="续跑同名实验，跳过已完成项，重跑报错、中断和未执行项")
     parser.add_argument("--task", nargs="+", help="覆盖 dataset.task_ids")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -24,14 +25,19 @@ def main() -> int:
     output = experiment_directory(config)
     dataset = config["dataset"]
     
-    tasks = load_tasks(dataset)
     if args.plan:
+        tasks, _, results = load_run(config, resume=args.resume)
+        pending = [trial_id for _, _, _, trial_id in iter_trials(tasks, config["conditions"], config["repeats"])
+                   if not completed_trial(results.get(trial_id))]
         print(json.dumps({
             "name": config["name"], "model": config["model"]["model"],
             "tasks": [task.id for task in tasks], "conditions": config["conditions"],
             "repeats": config["repeats"],
             "sample_size": dataset.get("sample_size"), "seed": dataset.get("seed"),
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
+            "resume": args.resume,
+            "skipped_trials": sum(completed_trial(row) for row in results.values()),
+            "pending_trials": len(pending), "pending_trial_ids": pending,
             "output_dir": config["output_dir"],
             "experiment_dir": str(output),
             "agent_runner": config["agent"]["runner"], "evaluator": config["evaluator"]["function"],
@@ -47,7 +53,7 @@ def main() -> int:
     from .runner import run_evaluation
 
     load_dotenv(Path.cwd() / ".env", override=False)
-    output = asyncio.run(run_evaluation(config, tasks=tasks))
+    output = asyncio.run(run_evaluation(config, resume=args.resume))
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     return 0 if manifest["status"] == "completed" else 1
 

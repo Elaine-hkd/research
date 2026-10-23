@@ -1,9 +1,20 @@
 """增量写入 JSON 产物，并明确统计汇总的分母。"""
 
 from collections import Counter
+import json
+from pathlib import Path
 from statistics import mean
 
-from utils.json_io import append_jsonl, redact, write_json
+from utils.json_io import redact, write_json
+
+
+def write_results(path: Path, rows: list[dict]) -> None:
+    """原子替换当前试验结果索引，重跑不会追加同一试验的重复记录。"""
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+    temporary.replace(path)
 
 
 def _summarize_stage_durations(rows: list[dict]) -> dict:

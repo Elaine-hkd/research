@@ -9,17 +9,16 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import time
 import traceback
 from uuid import uuid4
 
 from harness.runner import run_agent as run_harness
 
-from .artifacts import append_jsonl, redact, summarize, write_json
+from .artifacts import redact, summarize, write_json, write_results
 from .config import experiment_directory, load_function
 from .contracts import PreparedTask, Score, TrialContext
-from .dataset import load_tasks
+from .experiment import archive_trial, completed_trial, experiment_lock, iter_trials, load_run, trial_directory
 
 
 def _local_time() -> str:
@@ -58,7 +57,7 @@ def _score(score: Score) -> None:
 
 async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
                          setup_environment=None, run_agent=None, evaluate=None,
-                         create_environment=None) -> Path:
+                         create_environment=None, resume: bool = False) -> Path:
     """通过传入函数或配置 module:function 替换任意组件。
 
     数据集：load(index, ids) -> list[Task]；prepare(task, destination, condition)
@@ -67,20 +66,35 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     智能体：公共 run_agent 调用配置的 execute(**native_options)。
     不向 harness 或其记录器传递评估对象。
     评分器：异步 (context, agent_result) -> Score。环境由外部工厂创建。
+    resume=True 时恢复原计划，跳过已完成评分的试验，其余从头重跑。
     """
+    with experiment_lock(experiment_directory(config)):
+        return await _run_trials(
+            config, tasks=tasks, prepare_task=prepare_task,
+            setup_environment=setup_environment, run_agent=run_agent, evaluate=evaluate,
+            create_environment=create_environment, resume=resume,
+        )
+
+
+async def _run_trials(config, *, tasks, prepare_task, setup_environment,
+                      run_agent, evaluate, create_environment, resume):
     output = experiment_directory(config)
-    # 加载数据集和任务
     dataset = config["dataset"]
-    if tasks is None:
-        tasks = load_tasks(dataset)
-    tasks = list(tasks)
-    if not tasks:
-        raise ValueError("数据集未选中任何任务")
-    ids = [task.id for task in tasks]
-    if len(set(ids)) != len(ids) or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) for value in ids):
-        raise ValueError("任务 ID 必须唯一、非空，且可用作路径组成部分")
-    
-    
+    tasks, previous_manifest, rows = load_run(config, resume=resume, tasks=tasks)
+    conditions, repeats = config["conditions"], config["repeats"]
+    entries = list(iter_trials(tasks, conditions, repeats))
+    total = len(entries)
+    skipped = sum(completed_trial(row) for row in rows.values())
+    print(f"实验目录：{output}\n计划试验数：{total}，跳过：{skipped}，待运行：{total - skipped}", flush=True)
+    if resume and skipped == total:
+        # 修复结果已落盘、但汇总尚未来得及更新就退出的情况，无需模型凭据。
+        write_results(output / "results.jsonl", list(rows.values()))
+        write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
+        previous_manifest.update(status="completed", recorded_trials=total)
+        write_json(output / "manifest.json", previous_manifest)
+        print("所有试验均已完成，已有 trace 保持原样。", flush=True)
+        return output
+
     prepare_task = prepare_task or load_function(dataset["prepare"])
     if setup_environment is None and dataset.get("setup") is not None:
         setup_environment = load_function(dataset["setup"])
@@ -101,174 +115,187 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     if not secret:
         raise ValueError(f"运行前请设置模型凭据环境变量 {key_name}。")
 
-    # 设置输出目录
-    try:
-        output.mkdir(parents=True)
-    except FileExistsError as exc:
-        raise FileExistsError(
-            f"实验目录已存在：{output}。"
-            "请通过 --name 或 config.name 选择新实验名称。"
-        ) from exc
-    experiment_id = uuid4().hex
-    
-    conditions, repeats = config["conditions"], config["repeats"]
-    total = len(tasks) * len(conditions) * repeats
-    
-    manifest = {
-        "schema_version": 1, "started_at": _local_time(), "config": config,
-        "experiment_id": experiment_id, "experiment_name": config["name"],
-        "versions": _versions(), "planned_trials": total,
-        "tasks": [asdict(task) for task in tasks],
-        "components": {
-            "prepare": f"{prepare_task.__module__}:{prepare_task.__qualname__}",
-            "setup": (f"{setup_environment.__module__}:{setup_environment.__qualname__}"
-                      if setup_environment is not None else None),
-            "agent": f"{run_agent.__module__}:{run_agent.__qualname__}",
-            "recorder": recorder,
-            "evaluator": f"{evaluate.__module__}:{evaluate.__qualname__}",
-            "environment": f"{create_environment.__module__}:{create_environment.__qualname__}",
-        },
+    components = {
+        "prepare": f"{prepare_task.__module__}:{prepare_task.__qualname__}",
+        "setup": (f"{setup_environment.__module__}:{setup_environment.__qualname__}"
+                  if setup_environment is not None else None),
+        "agent": f"{run_agent.__module__}:{run_agent.__qualname__}",
+        "recorder": recorder,
+        "evaluator": f"{evaluate.__module__}:{evaluate.__qualname__}",
+        "environment": f"{create_environment.__module__}:{create_environment.__qualname__}",
     }
+    if resume:
+        if previous_manifest.get("components") != components:
+            raise ValueError("续跑组件与原实验不一致，请使用原组件或更换实验名称")
+        manifest = previous_manifest
+        manifest["resumed_at"] = _local_time()
+        manifest["resume_versions"] = _versions()
+        manifest.pop("finished_at", None)
+    else:
+        try:
+            output.mkdir(parents=True)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"实验目录已存在：{output}。"
+                "续跑请加 --resume；新实验请通过 --name 或 config.name 更换名称。"
+            ) from exc
+        manifest = {
+            "schema_version": 1, "started_at": _local_time(), "config": config,
+            "experiment_id": uuid4().hex, "experiment_name": config["name"],
+            "versions": _versions(), "planned_trials": total,
+            "tasks": [asdict(task) for task in tasks], "components": components,
+        }
+    experiment_id = manifest["experiment_id"]
+    manifest["status"] = "running"
     write_json(output / "manifest.json", manifest)
-    
-    rows = []
-    print(f"实验目录：{output}\n计划试验数：{total}", flush=True)
+    # 从各试验结果重建索引，恢复中断写入并去除以往的重复记录。
+    write_results(output / "results.jsonl", list(rows.values()))
+    write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
+
     try:
-        for task in tasks:
-            for repeat in range(1, repeats + 1):
-                for condition in conditions:
-                    trial_id = f"{task.id}__{condition}__{repeat:03d}"
-                    trial_dir = output / "trials" / trial_id
-                    trial_dir.mkdir(parents=True)
-                    result_path = trial_dir / "result.json"
-                    started = time.monotonic()
-                    row = {
-                        "schema_version": 1, "trial_id": trial_id,
-                        "task_id": task.id, "condition": condition, "repeat": repeat,
-                        "model": config["model"]["model"], "started_at": _local_time(),
-                        "dataset_index": dataset["index"],
-                        "agent_runner": manifest["components"]["agent"],
-                        "evaluator": manifest["components"]["evaluator"],
-                        "status": "running", "reward": None, "passed": None,
-                        "metrics": {}, "agent": None, "errors": [],
-                        "stage_durations_sec": dict.fromkeys((
-                            "prepare", "environment", "setup", "agent", "evaluate", "cleanup",
-                        )),
-                    }
-                    stage, environment = "prepare", None
-                    print(f"[{len(rows) + 1}/{total}] {trial_id}：准备任务", flush=True)
+        for trial_number, (task, condition, repeat, trial_id) in enumerate(entries, 1):
+            if completed_trial(rows.get(trial_id)):
+                print(f"[{trial_number}/{total}] {trial_id}：已完成，跳过", flush=True)
+                continue
+            if resume:
+                archived = archive_trial(output, trial_id)
+                if archived is not None:
+                    rows.pop(trial_id, None)
+                    print(f"  {trial_id}：旧尝试已归档至 {archived}", flush=True)
+            trial_dir = trial_directory(output, trial_id)
+            trial_dir.mkdir(parents=True)
+            result_path = trial_dir / "result.json"
+            started = time.monotonic()
+            row = {
+                "schema_version": 1, "trial_id": trial_id,
+                "task_id": task.id, "condition": condition, "repeat": repeat,
+                "model": config["model"]["model"], "started_at": _local_time(),
+                "dataset_index": dataset["index"],
+                "agent_runner": manifest["components"]["agent"],
+                "evaluator": manifest["components"]["evaluator"],
+                "status": "running", "reward": None, "passed": None,
+                "metrics": {}, "agent": None, "errors": [],
+                "stage_durations_sec": dict.fromkeys((
+                    "prepare", "environment", "setup", "agent", "evaluate", "cleanup",
+                )),
+            }
+            write_json(result_path, row)
+            rows[trial_id] = redact(row, secret)
+            stage, environment = "prepare", None
+            print(f"[{trial_number}/{total}] {trial_id}：准备任务", flush=True)
+            try:
+                # 准备任务
+                with _record_stage(row, stage, result_path, secret):
+                    prepared = prepare_task(task, trial_dir / "task", condition)
+                    if not isinstance(prepared, PreparedTask):
+                        raise TypeError("数据集准备函数必须返回 evaluation.PreparedTask")
+                    write_json(trial_dir / "task-info.json", {
+                        "task_id": task.id, "source": task.source,
+                        "skill_catalog": prepared.skill_catalog,
+                    })
+
+                # 初始化环境
+                stage = "environment"
+                with _record_stage(row, stage, result_path, secret):
+                    environment = create_environment(
+                        prepared.task_dir, output_dir=trial_dir,
+                        **environment_options,
+                    )
+                    row["environment_id"] = getattr(environment, "run_id", None)
+                    await environment.start()
+                    context = TrialContext(task, prepared, environment, trial_dir, condition, repeat)
+                
+                # 设置环境
+                stage = "setup"
+                if setup_environment is not None:
+                    with _record_stage(row, stage, result_path, secret):
+                        await setup_environment(context)
+
+                # 智能体运行
+                stage = "agent"
+                print(f"  {trial_id}：运行智能体", flush=True)
+                with _record_stage(row, stage, result_path, secret):
+                    agent_result = await run_harness(
+                        runner=run_agent,
+                        recorder=recorder,
+                        instruction=task.instruction,
+                        model=config["model"],
+                        tools=tools,
+                        settings=dict(agent_options),
+                        environment=environment,
+                        output_dir=trial_dir / "agent",
+                        timeout_sec=task.agent_timeout_sec,
+                        skill_catalog=prepared.skill_catalog,
+                        metadata={
+                            "experiment_id": experiment_id, "experiment_name": config["name"],
+                            "trial_id": trial_id, "task_id": task.id,
+                            "condition": condition, "repeat": repeat,
+                        },
+                    )
+                    row["agent"] = asdict(agent_result)
+
+                #评估任务结果
+                stage = "evaluate"
+                print(f"  {trial_id}：评估结果", flush=True)
+                with _record_stage(row, stage, result_path, secret):
+                    score = await evaluate(context, agent_result)
+                    _score(score)
+                    row.update(reward=float(score.reward), metrics=score.metrics,
+                               passed=score.reward >= config["pass_threshold"])
+            except BaseException as exc:
+                row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
+                row["errors"].append({"stage": stage, "type": type(exc).__name__, "message": redact(str(exc), secret)})
+                (trial_dir / "error.txt").write_text(redact(traceback.format_exc(), secret), encoding="utf-8")
+                if not isinstance(exc, Exception):
+                    raise
+            finally:
+                # 清理环境
+                cleanup_interrupt = None
+                if environment is not None:
                     try:
-                        # 准备任务
-                        with _record_stage(row, stage, result_path, secret):
-                            prepared = prepare_task(task, trial_dir / "task", condition)
-                            if not isinstance(prepared, PreparedTask):
-                                raise TypeError("数据集准备函数必须返回 evaluation.PreparedTask")
-                            write_json(trial_dir / "task-info.json", {
-                                "task_id": task.id, "source": task.source,
-                                "skill_catalog": prepared.skill_catalog,
-                            })
-
-                        # 初始化环境
-                        stage = "environment"
-                        with _record_stage(row, stage, result_path, secret):
-                            environment = create_environment(
-                                prepared.task_dir, output_dir=trial_dir,
-                                **environment_options,
-                            )
-                            row["environment_id"] = getattr(environment, "run_id", None)
-                            await environment.start()
-                            context = TrialContext(task, prepared, environment, trial_dir, condition, repeat)
-                        
-                        # 设置环境
-                        stage = "setup"
-                        if setup_environment is not None:
-                            with _record_stage(row, stage, result_path, secret):
-                                await setup_environment(context)
-
-                        # 智能体运行
-                        stage = "agent"
-                        print(f"  {trial_id}：运行智能体", flush=True)
-                        with _record_stage(row, stage, result_path, secret):
-                            agent_result = await run_harness(
-                                runner=run_agent,
-                                recorder=recorder,
-                                instruction=task.instruction,
-                                model=config["model"],
-                                tools=tools,
-                                settings=dict(agent_options),
-                                environment=environment,
-                                output_dir=trial_dir / "agent",
-                                timeout_sec=task.agent_timeout_sec,
-                                skill_catalog=prepared.skill_catalog,
-                                metadata={
-                                    "experiment_id": experiment_id, "experiment_name": config["name"],
-                                    "trial_id": trial_id, "task_id": task.id,
-                                    "condition": condition, "repeat": repeat,
-                                },
-                            )
-                            row["agent"] = asdict(agent_result)
-
-                        #评估任务结果
-                        stage = "evaluate"
-                        print(f"  {trial_id}：评估结果", flush=True)
-                        with _record_stage(row, stage, result_path, secret):
-                            score = await evaluate(context, agent_result)
-                            _score(score)
-                            row.update(reward=float(score.reward), metrics=score.metrics,
-                                       passed=score.reward >= config["pass_threshold"])
+                        with _record_stage(row, "cleanup", result_path, secret):
+                            await environment.destroy()
                     except BaseException as exc:
                         row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
-                        row["errors"].append({"stage": stage, "type": type(exc).__name__, "message": redact(str(exc), secret)})
-                        (trial_dir / "error.txt").write_text(redact(traceback.format_exc(), secret), encoding="utf-8")
+                        row["errors"].append({"stage": "cleanup", "type": type(exc).__name__, "message": redact(str(exc), secret)})
                         if not isinstance(exc, Exception):
-                            raise
-                    finally:
-                        # 清理环境
-                        cleanup_interrupt = None
-                        if environment is not None:
-                            try:
-                                with _record_stage(row, "cleanup", result_path, secret):
-                                    await environment.destroy()
-                            except BaseException as exc:
-                                row["status"] = "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "error"
-                                row["errors"].append({"stage": "cleanup", "type": type(exc).__name__, "message": redact(str(exc), secret)})
-                                if not isinstance(exc, Exception):
-                                    # 传播清理阶段的取消异常前，先保存本次试验。
-                                    cleanup_interrupt = exc
-                        if row["status"] == "running":
-                            row["status"] = "completed"
-                        partial_agent = trial_dir / "agent" / "result.json"
-                        if row["agent"] is None and partial_agent.is_file():
-                            row["agent"] = json.loads(partial_agent.read_text(encoding="utf-8"))
-                        trace_path = (row["agent"] or {}).get("trace_path")
-                        if trace_path:
-                            path = Path(trace_path)
-                            if not path.is_absolute():
-                                path = trial_dir / path
-                            path = path.resolve()
-                            base = trial_dir.resolve()
-                            row["trace_path"] = path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
-                        row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
-                        # 仅清理失败时奖励仍然有效，失败情况由状态字段体现。
-                        safe_row = redact(row, secret)
-                        write_json(result_path, safe_row)
-                        append_jsonl(output / "results.jsonl", safe_row)
-                        rows.append(safe_row)
-                        write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
-                        status_text = {"completed": "已完成", "cancelled": "已取消", "error": "错误"}[row["status"]]
-                        print(f"  {trial_id}：{status_text}，奖励={row['reward']}", flush=True)
-                        if cleanup_interrupt is not None:
-                            raise cleanup_interrupt
+                            # 传播清理阶段的取消异常前，先保存本次试验。
+                            cleanup_interrupt = exc
+                if row["status"] == "running":
+                    row["status"] = "completed"
+                partial_agent = trial_dir / "agent" / "result.json"
+                if row["agent"] is None and partial_agent.is_file():
+                    row["agent"] = json.loads(partial_agent.read_text(encoding="utf-8"))
+                trace_path = (row["agent"] or {}).get("trace_path")
+                if trace_path:
+                    path = Path(trace_path)
+                    if not path.is_absolute():
+                        path = trial_dir / path
+                    path = path.resolve()
+                    base = trial_dir.resolve()
+                    row["trace_path"] = path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
+                row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
+                # 仅清理失败时奖励仍然有效，失败情况由状态字段体现。
+                safe_row = redact(row, secret)
+                write_json(result_path, safe_row)
+                rows[trial_id] = safe_row
+                write_results(output / "results.jsonl", list(rows.values()))
+                write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
+                status_text = {"completed": "已完成", "cancelled": "已取消", "error": "错误"}[row["status"]]
+                print(f"  {trial_id}：{status_text}，奖励={row['reward']}", flush=True)
+                if cleanup_interrupt is not None:
+                    raise cleanup_interrupt
     finally:
         # 保存结果
         manifest["finished_at"] = _local_time()
         manifest["recorded_trials"] = len(rows)
         interrupted = len(rows) < total or any(
-            error["type"] in {"CancelledError", "KeyboardInterrupt"}
-            for row in rows for error in row["errors"]
+            row["status"] in {"running", "cancelled"} for row in rows.values()
         )
-        manifest["status"] = "interrupted" if interrupted else ("error" if any(row["errors"] for row in rows) else "completed")
+        failed = any(not completed_trial(row) for row in rows.values())
+        manifest["status"] = "interrupted" if interrupted else ("error" if failed else "completed")
         write_json(output / "manifest.json", manifest)
-        write_json(output / "summary.json", summarize(rows, conditions, len(tasks), repeats))
+        write_results(output / "results.jsonl", list(rows.values()))
+        write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
         print(f"结果已保存：{output}", flush=True)
     return output

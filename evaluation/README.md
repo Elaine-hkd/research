@@ -8,6 +8,7 @@
 | --- | --- |
 | `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
 | `evaluation/dataset.py` | 共用任务加载入口，按数据集配置随机采样 |
+| `evaluation/experiment.py` | 恢复原实验计划、判断跳过项、归档旧尝试并独占实验目录 |
 | `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
 | `harness/runner.py` | 公共 `run_agent`，检查公共参数，创建和关闭配置的 recorder，调用执行函数 |
 | `harness/<名称>/runner.py` | `execute` 绑定工具、运行 SDK、处理中断和收尾，返回 `AgentResult` |
@@ -82,9 +83,49 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 `--plan` 输出 `name` 与完整的 `experiment_dir`，只预览，不创建目录、启动 Docker 或调用模型。
 移除 `--plan` 才开始实际实验，可能构建镜像并产生模型调用费用。
 没有传 `--name` 时使用 TOML 顶层的 `name`；它现在表示实验目录最后一级的名称。
-相同 benchmark/harness/model 下同名目录已存在时直接报错，不覆盖结果，也不自动增加时间后缀。
+相同 benchmark/harness/model 下同名目录已存在时，默认报错；加 `--resume` 可续跑，
+不会自动增加时间后缀。
 实验名不能包含路径分隔符、Windows 非法文件名字符、首尾空格或末尾句点；拒绝 `.`、`..`
 和 Windows 保留设备名。原有配置中的默认 name 保留，需要另一次实验时更换名称。
+
+## 续跑同名实验
+
+使用原配置和实验名称，加 `--resume`。先预览需要重跑的试验：
+
+```powershell
+Set-Location E:\lornd\research
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "10" --resume --plan
+```
+
+`skipped_trials` 是已完成数量，`pending_trials` 和 `pending_trial_ids` 是本次待运行数量与清单。
+预览只读文件，不需要模型密钥，不修改实验结果或创建锁文件，不调用模型或启动 Docker。
+确认清单后移除 `--plan`：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "10" --resume
+```
+
+实际续跑需要原实验的依赖、模型凭据、注册中心和 Docker 环境，会对待运行项重新调用模型，
+可能产生费用。Python 调用使用 `run_evaluation(config, resume=True)`，与命令行共用恢复逻辑。
+
+- 跳过 `status=completed`、无流程错误且已有合法评分的试验，包括 `reward=0` 和 `passed=false`。
+  已完成试验的目录和 trace 不会重写；没有配置 recorder 也按相同规则判断。
+- 重跑 `error`、`cancelled`、中断后残留的 `running`，以及没有结果的试验。
+  仅存在部分 trace 不代表流程完成。评分或清理报错的试验也会从头重跑。
+- 按原 `manifest.json` 的实际任务清单续跑，不重新随机抽样，保留实验 ID、任务顺序、条件和重复次数。
+  当前配置必须与原配置快照一致；曾通过 `--task` 指定任务时，续跑也需提供原参数。
+  显式传入 `tasks` 或组件函数时也须与原记录一致。要改变实验设置，请使用新实验名称。
+- 重跑前把该试验的整份旧目录移至 `attempts/<trial_id>/<唯一标识>/`，保留旧 trace、错误及产物，
+  然后在原 `trials/<trial_id>/` 路径创建新环境和新记录。不会恢复原智能体会话。
+- 各试验的 `result.json` 是恢复依据；`results.jsonl` 原子更新，每个试验只保留当前一条记录。
+  `summary.json` 统计保留项与最新重跑结果，不重复累计旧失败尝试的评分、次数或耗时。
+  原始尝试的耗时仍保存在归档中。若所有试验已完成，直接跳过，不加载执行后端或要求模型密钥。
+
+同名实验由操作系统文件锁保护，避免两个进程同时重跑；进程结束或被强制终止后锁会释放，
+实验目录旁的 `.实验名称.lock` 文件可以保留。强制终止可能遗留 Docker 容器，续跑使用独立新容器，
+不接管旧容器；这类遗留资源仍需另行清理。`--resume` 要求原实验存在，不会隐式创建新实验。
+
+## 选择任务与采样
 
 删除 `dataset.task_ids` 一行选择完整索引。也可单次覆盖任务集合：
 
@@ -215,8 +256,9 @@ reward 缺失、格式无效、API 或环境失败时保留 `reward: null` 和�
 ```text
 logs/evaluation/<benchmark>/<harness>/<model>/<实验名称>/
   manifest.json                 配置、任务来源、文本哈希、依赖版本、计划数量
-  results.jsonl                 每个 trial 结束就追加一条
+  results.jsonl                 每个 trial 的当前结果，结束时原子更新，不重复追加
   summary.json                  每个 trial 结束更新评分及阶段耗时汇总
+  attempts/<trial_id>/<标识>/   重跑前归档的旧试验目录，保留旧 trace、错误和产物
   trials/<任务>__<条件>__<次数>/
     task/                       还原后的环境、verifier、oracle 副本
     skills/                     with-skill 的完整技能副本
@@ -275,9 +317,10 @@ setup、agent、evaluate、cleanup。`setup` 是可选的数据集环境设置�
 失败或正常取消的阶段仍记录终止前的用时，后续未运行的阶段保持 `null`。
 
 每个阶段退出时原子更新该 trial 的 `result.json`，可以在长实验中读取已完成阶段的耗时；
-运行中 `status` 为 `running`，trial 收尾后更新为最终状态并追加到实验的 `results.jsonl`。
+运行中 `status` 为 `running`，trial 收尾后更新为最终状态，并替换实验 `results.jsonl` 中该 trial 的记录。
 强制结束进程或断电时，只能保留最后一次已写入的阶段记录，正在执行阶段的最终用时无法保证。
-`summary.json` 仍在每个 trial 结束时更新，不包含尚未结束的 trial。
+`summary.json` 在每个 trial 结束时更新；续跑开始时也会根据已保存的结果重建，
+此时可能包含上次中断留下的 `running` 记录，其缺失评分仍为 `null`。
 
 `summary.json` 顶层及 `groups.<condition>` 中的 `stage_durations_sec` 均按阶段给出
 `count`、`total`、`mean`、`max`；除 count 外单位均为秒。
