@@ -110,8 +110,12 @@ Set-Location E:\lornd\research
 
 - 跳过 `status=completed`、无流程错误且已有合法评分的试验，包括 `reward=0` 和 `passed=false`。
   已完成试验的目录和 trace 不会重写；没有配置 recorder 也按相同规则判断。
+- 跳过已收尾的 agent 总时间预算耗尽项，保留其错误、trace 和缺失评分，不归档、不重新调用模型。
+  依据 `agent.finish_reason=timeout` 或 agent 阶段明确的预算耗尽异常判断；
+  环境构建超时、工具或 API 的普通超时不作为跳过依据。旧日志无需迁移。
+  `--resume --plan` 的 `skipped_agent_timeout_trial_ids` 列出这些 trial。
 - 重跑 `error`、`cancelled`、中断后残留的 `running`，以及没有结果的试验。
-  仅存在部分 trace 不代表流程完成。评分或清理报错的试验也会从头重跑。
+  其中排除上述 agent 超时项。仅存在部分 trace 不代表流程完成。评分或清理报错的试验也会从头重跑。
 - 按原 `manifest.json` 的实际任务清单续跑，不重新随机抽样，保留实验 ID、任务顺序、条件和重复次数。
   当前配置必须与原配置快照一致；曾通过 `--task` 指定任务时，续跑也需提供原参数。
   显式传入 `tasks` 或组件函数时也须与原记录一致。要改变实验设置，请使用新实验名称。
@@ -119,7 +123,8 @@ Set-Location E:\lornd\research
   然后在原 `trials/<trial_id>/` 路径创建新环境和新记录。不会恢复原智能体会话。
 - 各试验的 `result.json` 是恢复依据；`results.jsonl` 原子更新，每个试验只保留当前一条记录。
   `summary.json` 统计保留项与最新重跑结果，不重复累计旧失败尝试的评分、次数或耗时。
-  原始尝试的耗时仍保存在归档中。若所有试验已完成，直接跳过，不加载执行后端或要求模型密钥。
+  原始尝试的耗时仍保存在归档中。若所有试验均应跳过，不加载执行后端或要求模型密钥。
+  保留的 agent 超时仍是失败项，实验不会因此变成 completed，命令仍返回非零退出码。
 
 同名实验由操作系统文件锁保护，避免两个进程同时重跑；进程结束或被强制终止后锁会释放，
 实验目录旁的 `.实验名称.lock` 文件可以保留。强制终止可能遗留 Docker 容器，续跑使用独立新容器，
@@ -296,7 +301,11 @@ JSON 产物使用 `schema_version = 1`。`events.jsonl` 保留 OpenHands 原生�
 `agent/trace/` 使用 `harness-trace/1`。trial 结果中的 `trace_path` 相对该 trial 目录，
 指向标准 trace；旧实验没有此字段时，查看器读取 `agent/events.jsonl`。
 `status=completed` 表示流程完成，是否完成任务看 `passed` 与 `reward`；cleanup 失败会将
-status 标成 error，已取得的有效 reward 仍保留。`errors[].stage` 区分 prepare、environment、
+status 标成 error，已取得的有效 reward 仍保留。`failure_type` 区分环境构建/准备失败
+（`environment_failure`）、agent 运行失败（`agent_failure`）、agent 运行超时（`agent_timeout`）、
+评分失败（`evaluation_failure`）和清理失败（`cleanup_failure`），其余失败保留 `failure`。
+多个错误以首次流程失败为主，清理错误不覆盖此前的失败；summary 中的 `failure_types` 按类型计数。
+旧结果按原有字段即时分类，无需改写。`errors[].stage` 区分 prepare、environment、
 setup、agent、evaluate、cleanup。`setup` 是可选的数据集环境设置阶段，包括此处的技能上传。
 
 每个 trial 的 `stage_durations_sec` 分别记录以下阶段的秒数，使用单调时钟测量，包含异步等待：

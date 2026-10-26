@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from statistics import mean
 
+from agent_session_analyzer.outcomes import trial_failure_type
+
 from utils.json_io import redact, write_json
 
 
@@ -48,6 +50,8 @@ def summarize(rows: list[dict], conditions: list[str], tasks: int, repeats: int)
             "scored": len(scored),
             "missing": expected - len(selected),
             "statuses": dict(Counter(row["status"] for row in selected)),
+            "failure_types": dict(Counter(kind for row in selected
+                                          if (kind := trial_failure_type(row)) is not None)),
             "coverage": len(scored) / expected,
             "passed": passed,
             "solve_rate_all": passed / expected,

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .config import experiment_directory, load_config
-from .experiment import completed_trial, iter_trials, load_run
+from .experiment import completed_trial, iter_trials, load_run, skip_trial
 
 
 def main() -> int:
@@ -14,7 +14,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
     parser.add_argument("--name", help="实验名称，覆盖 config.name，支持中文")
     parser.add_argument("--plan", action="store_true", help="仅读取配置和任务，不调用模型或启动 Docker")
-    parser.add_argument("--resume", action="store_true", help="续跑同名实验，跳过已完成项，重跑报错、中断和未执行项")
+    parser.add_argument("--resume", action="store_true", help="续跑同名实验，跳过已完成和 agent 超时项，重跑其他报错、中断和未执行项")
     parser.add_argument("--task", nargs="+", help="覆盖 dataset.task_ids")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -28,7 +28,7 @@ def main() -> int:
     if args.plan:
         tasks, _, results = load_run(config, resume=args.resume)
         pending = [trial_id for _, _, _, trial_id in iter_trials(tasks, config["conditions"], config["repeats"])
-                   if not completed_trial(results.get(trial_id))]
+                   if not skip_trial(results.get(trial_id))]
         print(json.dumps({
             "name": config["name"], "model": config["model"]["model"],
             "tasks": [task.id for task in tasks], "conditions": config["conditions"],
@@ -36,7 +36,9 @@ def main() -> int:
             "sample_size": dataset.get("sample_size"), "seed": dataset.get("seed"),
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
             "resume": args.resume,
-            "skipped_trials": sum(completed_trial(row) for row in results.values()),
+            "skipped_trials": sum(skip_trial(row) for row in results.values()),
+            "skipped_agent_timeout_trial_ids": [trial_id for trial_id, row in results.items()
+                                                if skip_trial(row) and not completed_trial(row)],
             "pending_trials": len(pending), "pending_trial_ids": pending,
             "output_dir": config["output_dir"],
             "experiment_dir": str(output),

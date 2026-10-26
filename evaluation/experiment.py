@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
+from agent_session_analyzer.outcomes import trial_failure_type
+
 from .config import experiment_directory
 from .contracts import Task
 from .dataset import load_tasks
@@ -30,6 +32,14 @@ def completed_trial(result: dict | None) -> bool:
     return (result.get("status") == "completed" and not result.get("errors")
             and not isinstance(reward, bool) and isinstance(reward, (int, float))
             and math.isfinite(reward) and 0 <= reward <= 1)
+
+
+def skip_trial(result: dict | None) -> bool:
+    """续跑保留已有合法评分及已耗尽 agent 时间预算的最终记录。"""
+    return completed_trial(result) or bool(
+        result and result.get("status") in {"error", "completed", "cancelled"}
+        and trial_failure_type(result) == "agent_timeout"
+    )
 
 
 def _read_object(path: Path) -> dict:

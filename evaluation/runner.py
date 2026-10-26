@@ -13,16 +13,27 @@ import time
 import traceback
 from uuid import uuid4
 
+from agent_session_analyzer.outcomes import trial_failure_type
+
 from harness.runner import run_agent as run_harness
 
 from .artifacts import redact, summarize, write_json, write_results
 from .config import experiment_directory, load_function
 from .contracts import PreparedTask, Score, TrialContext
-from .experiment import archive_trial, completed_trial, experiment_lock, iter_trials, load_run, trial_directory
+from .experiment import archive_trial, completed_trial, experiment_lock, iter_trials, load_run, skip_trial, trial_directory
 
 
 def _local_time() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _experiment_status(rows: dict, total: int) -> str:
+    interrupted = len(rows) < total or any(
+        row["status"] in {"running", "cancelled"} and not skip_trial(row)
+        for row in rows.values()
+    )
+    failed = any(not completed_trial(row) for row in rows.values())
+    return "interrupted" if interrupted else ("error" if failed else "completed")
 
 
 @contextmanager
@@ -66,7 +77,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     智能体：公共 run_agent 调用配置的 execute(**native_options)。
     不向 harness 或其记录器传递评估对象。
     评分器：异步 (context, agent_result) -> Score。环境由外部工厂创建。
-    resume=True 时恢复原计划，跳过已完成评分的试验，其余从头重跑。
+    resume=True 时恢复原计划，跳过已完成评分和 agent 超时的试验，其余从头重跑。
     """
     with experiment_lock(experiment_directory(config)):
         return await _run_trials(
@@ -84,15 +95,15 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
     conditions, repeats = config["conditions"], config["repeats"]
     entries = list(iter_trials(tasks, conditions, repeats))
     total = len(entries)
-    skipped = sum(completed_trial(row) for row in rows.values())
+    skipped = sum(skip_trial(row) for row in rows.values())
     print(f"实验目录：{output}\n计划试验数：{total}，跳过：{skipped}，待运行：{total - skipped}", flush=True)
     if resume and skipped == total:
         # 修复结果已落盘、但汇总尚未来得及更新就退出的情况，无需模型凭据。
         write_results(output / "results.jsonl", list(rows.values()))
         write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
-        previous_manifest.update(status="completed", recorded_trials=total)
+        previous_manifest.update(status=_experiment_status(rows, total), recorded_trials=total)
         write_json(output / "manifest.json", previous_manifest)
-        print("所有试验均已完成，已有 trace 保持原样。", flush=True)
+        print("没有需要重跑的试验；已完成项和 agent 超时项的记录保持原样。", flush=True)
         return output
 
     prepare_task = prepare_task or load_function(dataset["prepare"])
@@ -154,8 +165,9 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
 
     try:
         for trial_number, (task, condition, repeat, trial_id) in enumerate(entries, 1):
-            if completed_trial(rows.get(trial_id)):
-                print(f"[{trial_number}/{total}] {trial_id}：已完成，跳过", flush=True)
+            if skip_trial(rows.get(trial_id)):
+                reason = "已完成" if completed_trial(rows[trial_id]) else "agent 已超时，不重跑"
+                print(f"[{trial_number}/{total}] {trial_id}：{reason}，跳过", flush=True)
                 continue
             if resume:
                 archived = archive_trial(output, trial_id)
@@ -274,6 +286,7 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
                     path = path.resolve()
                     base = trial_dir.resolve()
                     row["trace_path"] = path.relative_to(base).as_posix() if path.is_relative_to(base) else str(path)
+                row["failure_type"] = trial_failure_type(row)
                 row.update(finished_at=_local_time(), duration_sec=time.monotonic() - started)
                 # 仅清理失败时奖励仍然有效，失败情况由状态字段体现。
                 safe_row = redact(row, secret)
@@ -289,11 +302,7 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
         # 保存结果
         manifest["finished_at"] = _local_time()
         manifest["recorded_trials"] = len(rows)
-        interrupted = len(rows) < total or any(
-            row["status"] in {"running", "cancelled"} for row in rows.values()
-        )
-        failed = any(not completed_trial(row) for row in rows.values())
-        manifest["status"] = "interrupted" if interrupted else ("error" if failed else "completed")
+        manifest["status"] = _experiment_status(rows, total)
         write_json(output / "manifest.json", manifest)
         write_results(output / "results.jsonl", list(rows.values()))
         write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
