@@ -161,6 +161,9 @@ def _make_runtime(task_dir: Path, run_id: str, output_dir: Path | None = None):
         runtime = RuntimeEnvironment(inner=inner, task_path=task_dir, sandbox="docker")
 
     async def run_compose(command, check=True, timeout_sec=None):
+        if command and command[0] == "up":
+            command = [*command, "--no-build"]
+
         return await _run_compose_command(
             runtime.inner, command, check=check, timeout_sec=timeout_sec,
         )
