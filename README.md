@@ -17,3 +17,10 @@ SkillsBench 评估入口：`python -m evaluation --config config/skillsbench-ope
 
 配置、使用方法、结果格式和扩展接口见 [evaluation/README.md](evaluation/README.md)。
 环境与技能执行接口见 [environment/README.md](environment/README.md)。
+统一实验格式、组件边界、结果语义和恢复规则见 [Agent 实验原则](EXPERIMENT_PRINCIPLES.md)。
+
+## 代码思路
+
+尝试构建 dataset(environment) -> harness(model) --> evaluation --> visualization 全流程可配置，可替换。
+
+为了解决不同环境下的脚本执行问题（包括构建脚本、技能脚本、评估脚本等），定义了一个 worker 对容器内进程进行管理，每次要执行一个脚本时，先启动 worker，通过 worker 运行该脚本。因此需要在环境内预装 worker 依赖的 python 环境。
