@@ -62,7 +62,7 @@ def load_config(path: Path) -> dict:
     if isinstance(threshold, bool) or not isinstance(threshold, (float, int)) or not 0 <= threshold <= 1:
         raise ValueError("pass_threshold 必须在 [0, 1] 范围内")
     dataset = config["dataset"]
-    if extra := dataset.keys() - {"index", "task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
+    if extra := dataset.keys() - {"index", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
         raise ValueError(f"未知数据集配置项：{sorted(extra)}")
     dataset["index"] = str((path.parent / dataset["index"]).resolve(strict=True))
     if "task_ids" in dataset and (not isinstance(dataset["task_ids"], list)

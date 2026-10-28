@@ -7,8 +7,8 @@
 | 模块 | 职责 |
 | --- | --- |
 | `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
-| `evaluation/dataset.py` | 共用任务加载入口，按数据集配置随机采样 |
-| `evaluation/experiment.py` | 恢复原实验计划、判断跳过项、归档旧尝试并独占实验目录 |
+| `evaluation/dataset.py` | 共用任务加载入口，按数据集配置排除任务并随机采样 |
+| `evaluation/experiment.py` | 恢复原实验计划、判断跳过项、归档忽略项与旧尝试并独占实验目录 |
 | `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
 | `harness/runner.py` | 公共 `run_agent`，检查公共参数，创建和关闭配置的 recorder，调用执行函数 |
 | `harness/<名称>/runner.py` | `execute` 绑定工具、运行 SDK、处理中断和收尾，返回 `AgentResult` |
@@ -69,6 +69,7 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 | 模型采样与输出预算 | `[model] temperature`、`max_output_tokens`、`reasoning_effort` 等 OpenHands LLM 参数 |
 | 数据集及任务集合 | `[dataset] index`、`task_ids`、`loader`、`prepare` |
 | 随机采样数量及种子 | `[dataset] sample_size`、`seed`，可省略 |
+| 忽略任务 | `[dataset] exclude_task_ids`，在采样前排除，可省略 |
 | 环境启动后的数据集设置 | `[dataset] setup`，可省略 |
 | harness | `[agent] runner`，直接引用 `harness.<名称>.runner:execute` |
 | 记录器 | `[agent] recorder`，例如 `agent_session_analyzer:OpenHandsRecorder`；省略则不录制标准 trace |
@@ -97,14 +98,21 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 ## 续跑同名实验
 
-使用原配置和实验名称，加 `--resume`。先预览需要重跑的试验：
+使用原实验名称，加 `--resume`。除 `dataset.exclude_task_ids` 可调整外，其余配置保持一致。
+先预览需要归档和重跑的试验：
 
 ```powershell
 Set-Location E:\lornd\research
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "10" --resume --plan
 ```
 
-`skipped_trials` 是已完成数量，`pending_trials` 和 `pending_trial_ids` 是本次待运行数量与清单。
+`skipped_trials` 是已完成或 agent 总预算超时而跳过的数量，`pending_trials` 和 `pending_trial_ids`
+是本次待运行数量与清单。
+`ignored_trial_ids_to_archive` 列出忽略列表中仍有 trial 目录、将在实际续跑时归档的试验；
+`ignored_trials_dir` 显示独立归档目录。忽略项不计入 `planned_trials`、`skipped_trials` 或待运行清单。
+`replacement_task_ids` 列出本次为补足 `sample_size` 新抽取的任务；新任务的所有 condition/repeat
+均列入待运行清单。配置了 `seed` 时，在候选池未变化且实际续跑尚未保存新计划的情况下，
+预览与实际补抽一致；未配置 `seed` 时，预览与实际补抽可能不同。
 预览只读文件，不需要模型密钥，不修改实验结果或创建锁文件，不调用模型或启动 Docker。
 确认清单后移除 `--plan`：
 
@@ -123,15 +131,29 @@ Set-Location E:\lornd\research
   `--resume --plan` 的 `skipped_agent_timeout_trial_ids` 列出这些 trial。
 - 重跑 `error`、`cancelled`、中断后残留的 `running`，以及没有结果的试验。
   其中排除上述 agent 超时项。仅存在部分 trace 不代表流程完成。评分或清理报错的试验也会从头重跑。
-- 按原 `manifest.json` 的实际任务清单续跑，不重新随机抽样，保留实验 ID、任务顺序、条件和重复次数。
-  当前配置必须与原配置快照一致；曾通过 `--task` 指定任务时，续跑也需提供原参数。
-  显式传入 `tasks` 或组件函数时也须与原记录一致。要改变实验设置，请使用新实验名称。
+- 按 `manifest.json` 最新活动清单续跑，保留未忽略任务的顺序和结果，只补抽缺额，
+  保留实验 ID、条件和重复次数。
+  允许调整 `dataset.exclude_task_ids`，其余配置必须与原配置快照一致；曾通过 `--task` 指定任务时，
+  续跑也需提供原参数。显式传入 `tasks` 时须提供完整原始任务清单，组件函数也须与原记录一致。
+  要改变其他实验设置，请使用新实验名称。
+- 实际续跑先将忽略项的完整目录移动到 `ignored_trials/<trial_id>/<唯一标识>/`，包含 trace、
+  agent/verifier 日志、结果和任务副本；不覆盖或改写归档中的原始文件。归档项从当前
+  `results.jsonl`、`summary.json` 和活动任务清单中移除，因此不再计入评分、用量和耗时。
+  配置了 `sample_size` 时，从相同 `index` 和 `task_ids` / `--task` 候选范围中，排除忽略项及本实验
+  历史抽到的所有任务，按 `seed` 补抽缺额，新任务追加在保留项之后。原来抽到 10 个任务、
+  忽略其中 1 个时，保留 9 个并补抽 1 个，仍是 10 个任务。剩余候选不足时，在归档前报错。
+  `manifest.json` 保留 `original_tasks` 最初抽样集合、`task_history` 历史任务定义和
+  `ignored_trial_archives` 归档路径，并更新活动任务 `tasks`、计划试验数和配置快照。
+  后续续跑直接沿用已经补入的任务，不重复补抽或移动已归档的目录。移除忽略项不会自动换回
+  已被替换的历史任务，也不会恢复旧会话。不配置 `sample_size` 时只排除归档，不补抽。
 - 重跑前把该试验的整份旧目录移至 `attempts/<trial_id>/<唯一标识>/`，保留旧 trace、错误及产物，
   然后在原 `trials/<trial_id>/` 路径创建新环境和新记录。不会恢复原智能体会话。
 - 各试验的 `result.json` 是恢复依据；`results.jsonl` 原子更新，每个试验只保留当前一条记录。
   `summary.json` 统计保留项与最新重跑结果，不重复累计旧失败尝试的评分、次数或耗时。
   原始尝试的耗时仍保存在归档中。若所有试验均应跳过，不加载执行后端或要求模型密钥。
   保留的 agent 超时仍是失败项，实验不会因此变成 completed，命令仍返回非零退出码。
+  不配置 `sample_size` 且所有活动任务均被忽略时，仍会完成归档，活动试验数为 0，
+  评分覆盖率和成功率为 null。
 
 同名实验由操作系统文件锁保护，避免两个进程同时重跑；进程结束或被强制终止后锁会释放，
 实验目录旁的 `.实验名称.lock` 文件可以保留。强制终止可能遗留 Docker 容器，续跑使用独立新容器，
@@ -150,6 +172,7 @@ Set-Location E:\lornd\research
 ```toml
 [dataset]
 index = "../data/task/skillsbench.json"
+exclude_task_ids = ["pedestrian-traffic-counting"]
 sample_size = 10
 seed = 42
 loader = "datasets.skillsbench:load_tasks"
@@ -157,15 +180,24 @@ prepare = "datasets.skillsbench:prepare_task"
 setup = "datasets.skillsbench:setup_environment"
 ```
 
-`sample_size` 必须是正整数且不超过候选任务数；无放回采样不会重复抽取任务。
+`exclude_task_ids` 是可选的任务 ID 列表，默认不排除任何任务。先从候选任务池排除这些 ID，
+再抽取 `sample_size` 个任务，因此排除不会减少计划的采样数量。不配置 `sample_size` 时也会排除，
+其余任务保留原顺序；`task_ids` 或 `--task` 中的任务同样受排除列表约束。
+不在当前候选池中的排除项不影响结果，便于在不同候选子集间复用配置；排除后候选池为空会报错。
+
+`sample_size` 必须是正整数且不超过排除后的候选任务数；无放回采样不会重复抽取任务。
 保留 `task_ids` 或使用 `--task` 时，只从该列表中采样。`seed` 是可选整数，支持 0；
 相同候选任务及顺序、相同数量和种子得到相同任务及执行顺序。省略 `seed` 时每次随机抽样；
 只设置 `seed` 而没有 `sample_size` 会报错。不配置这两项时，原有选取和顺序保持不变。
 
-`--plan` 输出实际采样的任务列表、数量和种子，不调用模型或启动 Docker。
+`--plan` 输出排除列表以及实际采样的任务列表、数量和种子，不调用模型或启动 Docker。
 同次评测的所有 condition 和 repeat 共用一次采样结果；`manifest.json` 保存配置及实际任务清单。
-命令行和 `run_evaluation(config)` 共用此逻辑；显式传入 `tasks=...` 时按该列表直接评测，不再采样。
+命令行和 `run_evaluation(config)` 共用此逻辑；新实验显式传入 `tasks=...` 时按该列表直接评测，
+不再排除或采样；同名续跑仍对原任务清单应用忽略列表。
 数据集 loader 仍使用原有 `(index, task_ids)` 接口，更换数据集无需额外实现采样参数。
+新实验修改排除列表会改变候选任务池，即使种子相同也可能抽到不同任务。
+同名 `--resume` 则保留 manifest 中未忽略的活动任务，归档忽略项，并补抽至 `sample_size`，
+补抽结果保存后由后续续跑复用，详见上面的续跑规则。
 
 没有指定 `agent.timeout_sec` 时，使用各任务 frontmatter 中的 `agent.timeout_sec`；
 verifier 超时、服务、环境变量和 hardening 由任务原配置及 BenchFlow 处理。

@@ -13,7 +13,7 @@ from agent_session_analyzer.outcomes import trial_failure_type
 
 from .config import experiment_directory
 from .contracts import Task
-from .dataset import load_tasks
+from .dataset import excluded_task_ids, load_tasks
 
 
 def iter_trials(tasks, conditions, repeats):
@@ -63,10 +63,26 @@ def trial_directory(output: Path, trial_id: str) -> Path:
     return directory
 
 
+def _resume_identity(config: dict) -> dict:
+    """忽略列表可以调整，其余配置仍用于校验同名实验身份。"""
+    dataset = dict(config["dataset"])
+    dataset.pop("exclude_task_ids", None)
+    return {**config, "dataset": dataset}
+
+
+def _task_history(manifest: dict) -> list[dict]:
+    """合并最初清单和历次活动清单，保留曾抽到任务的定义及顺序。"""
+    known_tasks = {}
+    for task in (manifest.get("original_tasks", [])
+                 + manifest.get("task_history", []) + manifest["tasks"]):
+        known_tasks.setdefault(task["id"], task)
+    return list(known_tasks.values())
+
+
 def load_run(config: dict, *, resume=False, tasks=None) -> tuple[list[Task], dict | None, dict]:
     """返回任务、原实验清单及按试验 ID 索引的结果；本函数只读文件。
 
-    续跑以 manifest 的实际任务清单为准，不重新抽样。各 trial/result.json
+    续跑保留 manifest 的活动任务，排除忽略项后补足 sample_size。各 trial/result.json
     是恢复依据，包括尚未来得及写入 results.jsonl 的最终结果。
     """
     output = experiment_directory(config)
@@ -78,21 +94,30 @@ def load_run(config: dict, *, resume=False, tasks=None) -> tuple[list[Task], dic
         saved_config = manifest.get("config")
         if not isinstance(saved_config, dict):
             raise ValueError("原实验缺少配置快照，无法安全续跑")
-        if saved_config != config:
-            changed = sorted(key for key in saved_config.keys() | config.keys()
-                             if saved_config.get(key) != config.get(key))
-            raise ValueError(f"续跑配置与原实验不一致：{', '.join(changed)}；请恢复原配置或使用新实验名")
-        saved_tasks = manifest.get("tasks")
-        if not isinstance(saved_tasks, list) or not saved_tasks:
+        saved_identity = _resume_identity(saved_config)
+        current_identity = _resume_identity(config)
+        if saved_identity != current_identity:
+            changed = sorted(key for key in saved_identity.keys() | current_identity.keys()
+                             if saved_identity.get(key) != current_identity.get(key))
+            raise ValueError(f"续跑配置与原实验不一致：{', '.join(changed)}；仅允许调整 dataset.exclude_task_ids")
+        saved_tasks = manifest.get("original_tasks", manifest.get("tasks"))
+        active_tasks = manifest.get("tasks")
+        if not isinstance(saved_tasks, list) or not saved_tasks or not isinstance(active_tasks, list):
             raise ValueError("原实验缺少实际任务清单，无法续跑")
+        expected = len(active_tasks) * len(config["conditions"]) * config["repeats"]
+        if manifest.get("planned_trials") != expected:
+            raise ValueError("原实验的计划试验数与任务清单不一致")
         if tasks is not None and [asdict(task) for task in tasks] != saved_tasks:
             raise ValueError("续跑时显式传入的 tasks 必须与原实验任务清单一致")
-        tasks = [Task(**task) for task in saved_tasks]
+        tasks = [Task(**task) for task in active_tasks]
     elif tasks is None:
         tasks = load_tasks(config["dataset"])
     tasks = list(tasks)
+    if resume:
+        previous_ids = {task["id"] for task in _task_history(manifest)}
+        tasks = load_tasks(config["dataset"], retained_tasks=tasks, previous_task_ids=previous_ids)
     ids = [task.id for task in tasks]
-    if (not ids or len(set(ids)) != len(ids)
+    if ((not ids and not resume) or len(set(ids)) != len(ids)
             or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value)
                    for value in ids)):
         raise ValueError("任务 ID 必须唯一、非空，且可用作路径组成部分")
@@ -101,8 +126,6 @@ def load_run(config: dict, *, resume=False, tasks=None) -> tuple[list[Task], dic
         raise ValueError("任务 ID 与实验条件组合产生了重复试验 ID")
     results = {}
     if resume:
-        if manifest.get("planned_trials") != len(entries):
-            raise ValueError("原实验的计划试验数与任务清单不一致")
         for task, condition, repeat, trial_id in entries:
             path = trial_directory(output, trial_id) / "result.json"
             if not path.exists():
@@ -123,12 +146,59 @@ def load_run(config: dict, *, resume=False, tasks=None) -> tuple[list[Task], dic
     return tasks, manifest, results
 
 
-def archive_trial(output: Path, trial_id: str) -> Path | None:
-    """将待重跑的整份旧目录移到 attempts，保留失败 trace 和诊断产物。"""
+def ignored_trial_directories(config: dict, manifest: dict | None) -> list[tuple[str, Path]]:
+    """列出仍在 trials 下的忽略项，供只读计划和实际归档共用。"""
+    if manifest is None:
+        return []
+    excluded = excluded_task_ids(config["dataset"])
+    tasks = [Task(**task) for task in _task_history(manifest) if task["id"] in excluded]
+    output = experiment_directory(config)
+    directories = []
+    for _, _, _, trial_id in iter_trials(tasks, config["conditions"], config["repeats"]):
+        directory = trial_directory(output, trial_id)
+        if directory.exists():
+            if not directory.is_dir():
+                raise ValueError(f"试验路径必须为目录：{directory}")
+            directories.append((trial_id, directory))
+    return directories
+
+
+def apply_task_exclusions(config: dict, manifest: dict, tasks: list[Task]) -> None:
+    """在实验锁内归档忽略项，并更新待持久化的活动任务清单。"""
+    output = experiment_directory(config)
+    directories = ignored_trial_directories(config, manifest)
+    for trial_id, _ in directories:
+        destination = archive_trial(output, trial_id, archive_directory="ignored_trials")
+        if destination is not None:
+            manifest.setdefault("ignored_trial_archives", []).append({
+                "trial_id": trial_id, "path": destination.relative_to(output).as_posix(),
+            })
+            print(f"  {trial_id}：忽略，已归档至 {destination}", flush=True)
+    history = _task_history(manifest)
+    active_tasks = [asdict(task) for task in tasks]
+    if active_tasks != manifest["tasks"]:
+        manifest.setdefault("original_tasks", manifest["tasks"])
+        known_ids = {task["id"] for task in history}
+        for task in active_tasks:
+            if task["id"] not in known_ids:
+                history.append(task)
+                known_ids.add(task["id"])
+                print(f"  补抽任务：{task['id']}", flush=True)
+        manifest["task_history"] = history
+    manifest.update(
+        config=config, tasks=active_tasks,
+        planned_trials=len(tasks) * len(config["conditions"]) * config["repeats"],
+    )
+
+
+def archive_trial(output: Path, trial_id: str, *, archive_directory: str = "attempts") -> Path | None:
+    """归档完整 trial；重跑项放 attempts，忽略项放独立的 ignored_trials。"""
+    if archive_directory not in {"attempts", "ignored_trials"}:
+        raise ValueError(f"不支持的归档目录：{archive_directory}")
     source = trial_directory(output, trial_id)
     if not source.exists():
         return None
-    destination = output / "attempts" / trial_id / uuid4().hex
+    destination = output / archive_directory / trial_id / uuid4().hex
     for path in (destination.parent.parent, destination.parent):
         if path.is_symlink() or path.is_junction():
             raise ValueError(f"归档目录不能为链接：{path}")

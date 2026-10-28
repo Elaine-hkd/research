@@ -1,4 +1,4 @@
-"""加载配置的候选任务，并可选地在每次运行时抽样一次。"""
+"""加载配置的候选任务，排除忽略项，并可选地在每次运行时抽样一次。"""
 
 from pathlib import Path
 import random
@@ -7,8 +7,19 @@ from .config import load_function
 from .contracts import Task
 
 
-def load_tasks(dataset: dict) -> list[Task]:
-    """保留加载器的 (index, task_ids) 接口约定，并进行不放回抽样。"""
+def excluded_task_ids(dataset: dict) -> set[str]:
+    """统一校验新实验与续跑使用的忽略列表。"""
+    excluded_ids = dataset.get("exclude_task_ids", [])
+    if (not isinstance(excluded_ids, list)
+            or any(not isinstance(task_id, str) or not task_id.strip() for task_id in excluded_ids)):
+        raise ValueError("dataset.exclude_task_ids 必须为非空任务 ID 字符串组成的列表")
+    return set(excluded_ids)
+
+
+def load_tasks(dataset: dict, *, retained_tasks: list[Task] | None = None,
+               previous_task_ids: set[str] | None = None) -> list[Task]:
+    """新实验先排除再抽样；续跑保留已有任务，仅补抽缺少的数量。"""
+    excluded = excluded_task_ids(dataset)
     sample_size = dataset.get("sample_size")
     seed = dataset.get("seed")
     if sample_size is not None and (type(sample_size) is not int or sample_size < 1):
@@ -19,12 +30,31 @@ def load_tasks(dataset: dict) -> list[Task]:
         if sample_size is None:
             raise ValueError("使用 dataset.seed 时必须配置 dataset.sample_size")
 
+    retained = []
+    used_ids = set(previous_task_ids or ())
+    needed = sample_size
+    if retained_tasks is not None:
+        retained = [task for task in retained_tasks if task.id not in excluded]
+        if sample_size is None:
+            return retained
+        needed = sample_size - len(retained)
+        if needed <= 0:
+            return retained
+        used_ids.update(task.id for task in retained_tasks)
+
     loader = load_function(dataset["loader"])
     tasks = list(loader(Path(dataset["index"]), dataset.get("task_ids")))
-    if sample_size is None:
-        return tasks
-    if sample_size > len(tasks):
+    candidates = [task for task in tasks if task.id not in excluded and task.id not in used_ids]
+    if needed is None:
+        if excluded and not candidates:
+            raise ValueError("应用 dataset.exclude_task_ids 后候选任务为空")
+        return candidates
+    if needed > len(candidates):
+        if retained_tasks is not None:
+            raise ValueError(
+                f"需要补抽 {needed} 个任务，但排除忽略项及历史已抽任务后仅剩 {len(candidates)} 个候选任务"
+            )
         raise ValueError(
-            f"dataset.sample_size ({sample_size}）超过候选任务数量（{len(tasks)})"
+            f"dataset.sample_size ({sample_size}）超过候选任务数量（{len(candidates)})"
         )
-    return random.Random(seed).sample(tasks, sample_size)
+    return retained + random.Random(seed).sample(candidates, needed)

@@ -10,6 +10,8 @@ pass_threshold = 1.0
 index = "../data/task/skillsbench.json"
 # 删除 task_ids 后，使用完整索引作为候选任务池。
 # task_ids = ["3d-scan-calc"]
+# 可选：在采样前排除指定任务，不采样时也生效。
+# exclude_task_ids = ["pedestrian-traffic-counting"]
 # 可选：从候选任务池中进行不放回抽样。
 sample_size = 10
 seed = 42

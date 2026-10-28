@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 
 from .config import experiment_directory, load_config
-from .experiment import completed_trial, iter_trials, load_run, skip_trial
+from .experiment import (
+    completed_trial, ignored_trial_directories, iter_trials, load_run, skip_trial,
+)
 
 
 def main() -> int:
@@ -14,7 +16,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
     parser.add_argument("--name", help="实验名称，覆盖 config.name，支持中文")
     parser.add_argument("--plan", action="store_true", help="仅读取配置和任务，不调用模型或启动 Docker")
-    parser.add_argument("--resume", action="store_true", help="续跑同名实验，跳过已完成和 agent 超时项，重跑其他报错、中断和未执行项")
+    parser.add_argument("--resume", action="store_true", help="续跑同名实验，归档忽略项并补抽，跳过已完成和 agent 超时项，重跑其余未完成项")
     parser.add_argument("--task", nargs="+", help="覆盖 dataset.task_ids")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -26,16 +28,22 @@ def main() -> int:
     dataset = config["dataset"]
     
     if args.plan:
-        tasks, _, results = load_run(config, resume=args.resume)
+        tasks, manifest, results = load_run(config, resume=args.resume)
         pending = [trial_id for _, _, _, trial_id in iter_trials(tasks, config["conditions"], config["repeats"])
                    if not skip_trial(results.get(trial_id))]
+        saved_ids = {task["id"] for task in manifest["tasks"]} if manifest is not None else set()
+        replacements = [task.id for task in tasks if task.id not in saved_ids] if args.resume else []
         print(json.dumps({
             "name": config["name"], "model": config["model"]["model"],
             "tasks": [task.id for task in tasks], "conditions": config["conditions"],
             "repeats": config["repeats"],
             "sample_size": dataset.get("sample_size"), "seed": dataset.get("seed"),
+            "exclude_task_ids": dataset.get("exclude_task_ids", []),
             "planned_trials": len(tasks) * len(config["conditions"]) * config["repeats"],
             "resume": args.resume,
+            "replacement_task_ids": replacements,
+            "ignored_trial_ids_to_archive": [trial_id for trial_id, _ in ignored_trial_directories(config, manifest)],
+            "ignored_trials_dir": str(output / "ignored_trials"),
             "skipped_trials": sum(skip_trial(row) for row in results.values()),
             "skipped_agent_timeout_trial_ids": [trial_id for trial_id, row in results.items()
                                                 if skip_trial(row) and not completed_trial(row)],

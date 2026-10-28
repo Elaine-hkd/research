@@ -52,9 +52,9 @@ def summarize(rows: list[dict], conditions: list[str], tasks: int, repeats: int)
             "statuses": dict(Counter(row["status"] for row in selected)),
             "failure_types": dict(Counter(kind for row in selected
                                           if (kind := trial_failure_type(row)) is not None)),
-            "coverage": len(scored) / expected,
+            "coverage": len(scored) / expected if expected else None,
             "passed": passed,
-            "solve_rate_all": passed / expected,
+            "solve_rate_all": passed / expected if expected else None,
             "solve_rate_scored": passed / len(scored) if scored else None,
             "mean_reward_scored": mean(row["reward"] for row in scored) if scored else None,
             "stage_durations_sec": _summarize_stage_durations(selected),

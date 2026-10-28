@@ -20,7 +20,10 @@ from harness.runner import run_agent as run_harness
 from .artifacts import redact, summarize, write_json, write_results
 from .config import experiment_directory, load_function
 from .contracts import PreparedTask, Score, TrialContext
-from .experiment import archive_trial, completed_trial, experiment_lock, iter_trials, load_run, skip_trial, trial_directory
+from .experiment import (
+    apply_task_exclusions, archive_trial, completed_trial, experiment_lock,
+    iter_trials, load_run, skip_trial, trial_directory,
+)
 
 
 def _local_time() -> str:
@@ -77,7 +80,7 @@ async def run_evaluation(config: dict, *, tasks=None, prepare_task=None,
     智能体：公共 run_agent 调用配置的 execute(**native_options)。
     不向 harness 或其记录器传递评估对象。
     评分器：异步 (context, agent_result) -> Score。环境由外部工厂创建。
-    resume=True 时恢复原计划，跳过已完成评分和 agent 超时的试验，其余从头重跑。
+    resume=True 时归档忽略项并补足 sample_size，保留已有任务；跳过已完成评分和 agent 超时项。
     """
     with experiment_lock(experiment_directory(config)):
         return await _run_trials(
@@ -98,6 +101,7 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
     skipped = sum(skip_trial(row) for row in rows.values())
     print(f"实验目录：{output}\n计划试验数：{total}，跳过：{skipped}，待运行：{total - skipped}", flush=True)
     if resume and skipped == total:
+        apply_task_exclusions(config, previous_manifest, tasks)
         # 修复结果已落盘、但汇总尚未来得及更新就退出的情况，无需模型凭据。
         write_results(output / "results.jsonl", list(rows.values()))
         write_json(output / "summary.json", summarize(list(rows.values()), conditions, len(tasks), repeats))
@@ -138,7 +142,9 @@ async def _run_trials(config, *, tasks, prepare_task, setup_environment,
     if resume:
         if previous_manifest.get("components") != components:
             raise ValueError("续跑组件与原实验不一致，请使用原组件或更换实验名称")
+        apply_task_exclusions(config, previous_manifest, tasks)
         manifest = previous_manifest
+        manifest["recorded_trials"] = len(rows)
         manifest["resumed_at"] = _local_time()
         manifest["resume_versions"] = _versions()
         manifest.pop("finished_at", None)
