@@ -17,8 +17,10 @@ def run_resource(payload):
         root = Path(directory)
         for relative, content in payload["files"].items():
             destination = (root / relative).resolve()
-            if not destination.is_relative_to(root.resolve()):
-                raise ValueError("下载的资源超出了准备目录范围")
+            try:
+                destination.relative_to(root.resolve())
+            except ValueError as exc:
+                raise ValueError("下载的资源超出了准备目录范围") from exc
             destination.parent.mkdir(parents=True, exist_ok=True)
             with destination.open("w", encoding="utf-8", newline="") as stream:
                 stream.write(content)
@@ -28,8 +30,12 @@ def run_resource(payload):
 def _run_resource(payload):
     root = Path(payload["root"]).resolve(strict=True)
     resource = (root / payload["relative_path"]).resolve(strict=True)
-    if not root.is_dir() or not resource.is_relative_to(root):
+    if not root.is_dir():
         raise ValueError("资源超出了技能目录范围（包括符号链接）")
+    try:
+        resource.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("资源超出了技能目录范围（包括符号链接）") from exc
     if not resource.is_file():
         raise ValueError("资源不是文件：" + str(resource))
     cwd = (Path(payload["workdir"]).resolve(strict=True)

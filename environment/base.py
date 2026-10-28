@@ -24,6 +24,7 @@ class CommandResult:
 
 class Environment(Protocol):
     executor: ResourceExecutor
+    worker_python_executable: str
     async def start(self) -> None: ...
     async def wait_ready(self, timeout: float = 30) -> None: ...
     async def execute(self, argv: Sequence[str], *, cwd: str | None = None,

@@ -15,6 +15,7 @@ environment/
     registry.py             原 HTTP 注册中心客户端
     _worker.py              目标环境内的脚本监督进程
   tasks.py                  SkillsBench 分离索引转任务包
+  runtime.py                框架独立 Python 的版本、构建来源与启动探测
   desktop.py                给任务副本统一添加 Xfce/noVNC 配置
   start-desktop.sh           所有任务复用的桌面启动脚本
 ```
@@ -47,11 +48,17 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from environment import DockerEnvironment
+from pathlib import Path
+from uuid import uuid4
+from environment import DockerEnvironment, materialize_skillsbench_task
 
 async def main():
+    task_dir = materialize_skillsbench_task(
+        "data/task/skillsbench.json", "3d-scan-calc",
+        Path("workspace/environment") / uuid4().hex / "task",
+    )
     async with DockerEnvironment(
-        task_dir=r"E:\lornd\skillsbench\tasks\3d-scan-calc",
+        task_dir=task_dir,
         registry_url="http://127.0.0.1:5000",
         workdir="/root",
     ) as env:
@@ -82,7 +89,19 @@ asyncio.run(main())
 - 支持 async with，退出自动回收。执行器执行期间销毁操作等待生命周期锁。
 
 Docker 适配以已检查源码的 benchflow==0.7.8 为准，仅支持其 Linux Docker 后端。需要 Docker CLI、Compose v2、运行中的 Docker 引擎。
-容器 Python 3.9+，宿主 Python 3.12+；技能依赖由任务镜像提供。注册中心请求只发生在宿主。
+框架使用独立 Python（最低 3.8，默认构建 3.12.12），任务镜像需自行提供 Bash；宿主 Python 3.12+。
+`start()` / `wait_ready()` 通过原始容器通道检查框架解释器版本、worker 标准库导入和
+任务 PATH 中的 Bash；失败时不进入 running 状态。注册中心请求只发生在宿主。
+
+| 设置 | 用途 | Docker 默认值 |
+| --- | --- | --- |
+| `worker_python_executable` | worker、命令清理、DSH/OpenHands 文件工具 | `/opt/research-runtime/python3` |
+| `python_executable` | `execute_resource` 执行 Python 技能脚本 | `python3`，按任务原 PATH 查找 |
+
+框架 Python 通过绝对路径及 `-I -B` 启动，忽略 `PYTHONHOME`、`PYTHONPATH` 和用户 site-packages，
+不在任务目录导入同名模块，也不写入 Python 字节码。任务子进程继续使用原有环境变量，
+原生终端命令与评分器不切换到框架 Python；技能缺少解释器或第三方包时不会自动借用框架环境。
+本地环境不下载运行时，文件工具使用宿主 `sys.executable`，技能脚本保留其原配置。
 原始命令通道将 stderr 合并至 stdout，但技能脚本由监督进程分别捕获 stdout/stderr。
 Docker 原始命令与技能脚本复用容器内监督进程，每次命令在独立进程组中执行；
 达到执行时限后杀死该组，并限时回收输出和退出状态。清理成功的命令超时返回
@@ -167,6 +186,36 @@ APT 签名校验保持启用。源地址按[清华 Ubuntu](https://mirrors.tuna.
 `PIP_INDEX_URL` 仍优先；此处不配置 uv，也不删除第三方 extra-index-url。
 不修改 `data/` 原件或已有任务副本，不更改镜像基础版本，也不配置 npm 或 Docker Hub 镜像。
 现有 `materialize_skillsbench_task(...)` 调用无需调整；只有重新生成的副本才包含此操作。
+
+副本的 `environment/Dockerfile` 会添加 `# research: isolated worker runtime`：
+在原最终 FROM 前插入独立阶段，使用 `ghcr.io/astral-sh/uv:0.9.22-bookworm-slim`
+下载固定 Python 3.12.12 的 python-build-standalone 发行包；uv 的 `--no-bin` 避免安装全局命令。
+最终任务镜像只复制 `/opt/research-runtime`，不复制 uv、构建镜像的系统库或系统环境变量，
+不为框架执行 APT/pip 安装，不修改系统 Python、PATH、USER、WORKDIR、虚拟环境或 Conda。
+框架版本、下载镜像和路径集中在 `environment/runtime.py`。
+
+构建阶段沿用最终 FROM 的 `--platform`；放在最终阶段前以保留原有前置阶段的编号，
+镜像原有的换源逻辑复用同一份 Dockerfile 指令解析，不把 heredoc 中的数据误认作阶段。
+复制前检查保留目录是否冲突，复制后以原最终 USER 运行依赖探测；运行时目录允许非 root 读取与执行。
+这属于 Python 运行时隔离，仍共享目标镜像的内核、glibc 和动态链接环境；当前下载的是 glibc Linux 版本，
+面向 Ubuntu/Debian，不能直接保证 Alpine/musl 或旧 glibc 兼容，构建与启动探测均不会自动升级系统库。
+本次未构建镜像，下载可达性和目标镜像 ABI 兼容性仍需运行验证。
+
+自动注入针对默认主 Dockerfile 的最终阶段；预构建镜像、其他构建文件或较早 target、辅助服务
+需自行提供独立运行时，可在 `[environment]` 中用 `worker_python_executable` 指定绝对路径。
+原始数据和历史 trial 不修改；旧副本中的系统包安装步骤不会自动清除，需重新生成副本并构建。
+
+验证本次缺 Python 的任务（执行目录 `E:\lornd\research`，需现有项目依赖与 Docker）：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m environment.demo --index data\task\skillsbench.json --task-id fix-build-google-auto
+```
+
+该命令会创建新副本、构建并启动容器、通过 worker 执行命令、下载文件，然后销毁容器；
+会下载构建镜像、独立 Python 及任务原 Dockerfile 所需依赖，不调用模型、注册中心或评分器。
+预期先输出框架解释器 `/opt/research-runtime/python3`、任务技能解释器 `python3`，
+最后输出“命令执行和文件传输成功”；即使任务系统没有 python3，这个检查也应使用框架 Python 完成。
+未执行测试，由用户自行验证。
 
 只检查生成结果、不启动 Docker（项目已有 Python 环境与依赖即可；执行目录 `E:\lornd\research`）：
 

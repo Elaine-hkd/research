@@ -40,6 +40,8 @@ class LocalEnvironment:
         self.state = "new"
         self._lock = asyncio.Lock()
         self._env = checked_env(env)
+        # 本地监督代码直接运行在宿主 Python 中，不改变技能配置的解释器。
+        self.worker_python_executable = sys.executable
         self.executor = LocalExecutor(
             self, registry_url=registry_url, allowed_skills=allowed_skills,
             registry_timeout=registry_timeout, default_timeout=default_timeout,

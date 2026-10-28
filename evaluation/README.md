@@ -40,7 +40,14 @@ Set-Location E:\lornd\research
 注册中心需预先注册当前任务 skill_catalog 中的技能，并保持技能正文和资源与数据集一致；
 setup 将访问范围限制为这份清单，不会上传数据集技能到远端注册中心。
 前三个工具仍读取注册中心；execute_resource 下载技能资源后，在当前 trial 容器执行。
-镜像需提供 python3 和技能依赖；现有下载协议只支持 UTF-8 文本资源。
+新任务副本通过独立构建阶段下载固定 Python 3.12.12，只将其复制到默认主镜像的
+`/opt/research-runtime`；不会为框架安装系统包、修改系统 Python 或任务 PATH。
+worker、清理和文件工具使用 `worker_python_executable`（默认 `/opt/research-runtime/python3`），
+Python 技能仍使用 `python_executable`（默认任务 PATH 中的 `python3`），终端命令和评分器保留原环境。
+框架通过 `-I -B` 避免导入任务 Python 包；环境启动时检查独立解释器和任务原有的 Bash。
+预构建或自定义镜像需自行提供独立运行时；当前下载针对 glibc Linux，ABI 兼容性需实际构建验证。
+技能所需解释器和第三方依赖仍由任务镜像提供。现有下载协议只支持 UTF-8 文本资源；
+旧 trial 副本需重新生成并构建，原始数据和历史结果不修改。
 
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml

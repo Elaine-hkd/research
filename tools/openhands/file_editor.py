@@ -42,7 +42,10 @@ class FileExecutor(ToolExecutor):
     def __call__(self, action, conversation=None) -> FileObservation:
         arguments = action.model_dump(mode="json")
         # JSON 仅作为 argv 中的数据，不作为可执行源码或 shell 插值。
-        command = file_command(self.operation, arguments)
+        command = file_command(
+            self.operation, arguments,
+            python_executable=self.channel.environment.worker_python_executable,
+        )
         observation = self.channel.run_command(
             ShellAction(command=command, timeout_sec=self.channel.timeout),
             conversation, tool_name=self.operation, arguments=arguments,

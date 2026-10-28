@@ -23,8 +23,10 @@ async def main():
     else:
         task = args.task
     async with BenchFlowEnvironment(task) as environment:
+        print(f"框架解释器：{environment.worker_python_executable}")
+        print(f"任务技能解释器：{environment.executor.python_executable}")
         result = await environment.execute([
-            "python3", "-c",
+            environment.worker_python_executable, "-I", "-B", "-c",
             "from pathlib import Path; Path('/tmp/environment-hello.txt').write_text('hello'); print('已就绪')",
         ])
         if not result.success:

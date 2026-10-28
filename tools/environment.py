@@ -49,12 +49,12 @@ else:
 '''
 
 
-def file_command(operation: str, arguments: dict) -> str:
+def file_command(operation: str, arguments: dict, *, python_executable: str) -> str:
     """构造现有容器端 UTF-8 文件操作命令，argv 仅承载 JSON 数据。"""
     if operation not in {"read_file", "write_file", "replace_text"}:
         raise ValueError(f"未知文件操作：{operation}")
     return shlex.join([
-        "python3", "-X", "utf8", "-c", _FILE_PROGRAM, operation,
+        python_executable, "-I", "-B", "-X", "utf8", "-c", _FILE_PROGRAM, operation,
         json.dumps(arguments, ensure_ascii=False),
     ])
 
@@ -90,8 +90,12 @@ class EnvironmentOperations:
                                    requested_timeout=arguments.get("timeout"), resource=True)
 
     async def run_file(self, operation: str, arguments: dict) -> OperationResult:
+        command = file_command(
+            operation, arguments,
+            python_executable=self.environment.worker_python_executable,
+        )
         return await self.run_command(
-            file_command(operation, arguments), timeout_sec=self.timeout,
+            command, timeout_sec=self.timeout,
             tool_name=operation, arguments=arguments,
         )
 

@@ -28,6 +28,9 @@ class ExecutionResult:
 
 
 class ResourceExecutor(Protocol):
+    @property
+    def python_executable(self) -> str: ...
+
     async def execute_resource(
         self, skill_name: str, relative_path: str,
         arguments: Sequence[str] = (), timeout: float | None = None,

@@ -23,6 +23,11 @@ class BoundExecutor:
         self._workdir = workdir
         self._env = checked_env(env)
 
+    @property
+    def python_executable(self) -> str:
+        """任务配置的技能脚本解释器，不用于框架 worker 或文件工具。"""
+        return self._python
+
     async def execute_resource(self, skill_name, relative_path, arguments=(), timeout=None,
                                *, total_timeout=None):
         """可选地为下载和脚本执行设置共享时间预算。

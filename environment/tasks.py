@@ -5,6 +5,10 @@ from pathlib import Path
 import re
 import shutil
 
+from .runtime import (CONTAINER_RUNTIME_PROBE, WORKER_PYTHON_EXECUTABLE,
+                      WORKER_RUNTIME_DIRECTORY, WORKER_RUNTIME_IMAGE,
+                      worker_runtime_build_command)
+
 
 _PIP_MIRROR_MARKER = "# research: pip mirror (TUNA)"
 _PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -38,20 +42,8 @@ echo "research：已为 $ID 配置 APT 清华镜像源（TUNA）"
 """.strip()
 
 
-def _inject_package_mirrors(dockerfile: Path) -> None:
-    """在 FROM 后设置 pip，并在每个阶段的首个 RUN 前准备 APT。"""
-    text = dockerfile.read_text(encoding="utf-8-sig")
-    inject_pip = _PIP_MIRROR_MARKER not in text
-    inject_apt = _APT_MIRROR_MARKER not in text
-    if not inject_pip and not inject_apt:
-        return
-    lines = text.splitlines(keepends=True)
-    pip_block = f"\n{_PIP_MIRROR_MARKER}\nENV PIP_INDEX_URL={_PIP_INDEX_URL}\n"
-    apt_block = f"\n{_APT_MIRROR_MARKER}\nRUN " + json.dumps(
-        ["/bin/sh", "-ec", _APT_MIRROR_COMMAND],
-    ) + "\n"
-    insertions = {}
-    pending_stage = False
+def _dockerfile_instructions(lines: list[str], dockerfile: Path):
+    """读取完整指令的行号与参数，跳过续行和 heredoc 中的数据。"""
     escape = "\\"
     i = 0
     while i < len(lines):
@@ -74,15 +66,8 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
         if instruction is None:
             continue
         keyword = instruction[1].upper()
-        if keyword == "FROM":
-            arguments = "".join(lines[start:i]).replace(escape + "\n", " ").split()[1:]
-            image = next(part for part in arguments if not part.startswith("--"))
-            pending_stage = image.lower() != "scratch" and inject_apt
-            if image.lower() != "scratch" and inject_pip:
-                insertions[i] = pip_block
-        elif keyword == "RUN" and pending_stage:
-            insertions[start] = insertions.get(start, "") + apt_block
-            pending_stage = False
+        end = i
+        arguments = "".join(lines[start:end]).replace(escape + "\n", " ").split()[1:]
         # heredoc 中可能包含作为数据的 FROM/RUN，也可能嵌入 Python 导入代码。
         if keyword in {"RUN", "COPY"}:
             command = "".join(lines[start:i])
@@ -95,6 +80,32 @@ def _inject_package_mirrors(dockerfile: Path) -> None:
                         break
                 else:
                     raise ValueError(f"Dockerfile 的 heredoc 未闭合：{delimiter!r}: {dockerfile}")
+        yield start, end, keyword, arguments
+
+
+def _inject_package_mirrors(dockerfile: Path) -> None:
+    """在 FROM 后设置 pip，并在每个阶段的首个 RUN 前准备 APT。"""
+    text = dockerfile.read_text(encoding="utf-8-sig")
+    inject_pip = _PIP_MIRROR_MARKER not in text
+    inject_apt = _APT_MIRROR_MARKER not in text
+    if not inject_pip and not inject_apt:
+        return
+    lines = text.splitlines(keepends=True)
+    pip_block = f"\n{_PIP_MIRROR_MARKER}\nENV PIP_INDEX_URL={_PIP_INDEX_URL}\n"
+    apt_block = f"\n{_APT_MIRROR_MARKER}\nRUN " + json.dumps(
+        ["/bin/sh", "-ec", _APT_MIRROR_COMMAND],
+    ) + "\n"
+    insertions = {}
+    pending_stage = False
+    for start, end, keyword, arguments in _dockerfile_instructions(lines, dockerfile):
+        if keyword == "FROM":
+            image = next(part for part in arguments if not part.startswith("--"))
+            pending_stage = image.lower() != "scratch" and inject_apt
+            if image.lower() != "scratch" and inject_pip:
+                insertions[end] = pip_block
+        elif keyword == "RUN" and pending_stage:
+            insertions[start] = insertions.get(start, "") + apt_block
+            pending_stage = False
     # 没有 RUN 的最终阶段也可能在后续添加桌面安装命令。
     if pending_stage:
         insertions[len(lines)] = insertions.get(len(lines), "") + apt_block
@@ -129,6 +140,47 @@ def _native_task_text(source: Path) -> str:
     return "---\n" + header + "---\n" + "".join(lines[end + 1:])
 
 
+def _inject_worker_runtime(dockerfile: Path) -> None:
+    """单独构建 Python，只将独立目录复制到主镜像最终阶段。"""
+    marker = "# research: isolated worker runtime"
+    stage = "research-worker-runtime"
+    text = dockerfile.read_text(encoding="utf-8-sig")
+    if marker in text:
+        return
+    if "# research: worker runtime" in text:
+        raise ValueError("任务副本包含旧版系统依赖安装步骤，请从原始数据重新生成")
+    lines = text.splitlines(keepends=True)
+    stages = [instruction for instruction in _dockerfile_instructions(lines, dockerfile)
+              if instruction[2] == "FROM"]
+    if not stages:
+        raise ValueError(f"Dockerfile 缺少 FROM：{dockerfile}")
+    for _, _, _, arguments in stages:
+        if len(arguments) >= 3 and arguments[-2].upper() == "AS" and arguments[-1].lower() == stage:
+            raise ValueError(f"Dockerfile 使用了框架保留的阶段名称 {stage}：{dockerfile}")
+    final_start, _, _, final_arguments = stages[-1]
+    # 放在最终 FROM 前，保留原有前置阶段的编号和最终阶段的用户、目录、环境。
+    platform = " ".join(argument for argument in final_arguments if argument.startswith("--platform="))
+    runtime_stage = (
+        f"\n{marker}\nFROM {platform + ' ' if platform else ''}{WORKER_RUNTIME_IMAGE} AS {stage}\n"
+        "RUN " + json.dumps(["/bin/sh", "-ec", worker_runtime_build_command()]) + "\n\n"
+    )
+    directory = WORKER_RUNTIME_DIRECTORY
+    collision_check = (
+        f"if [ -e {directory} ] || [ -L {directory} ]; then "
+        f"echo 'research: reserved runtime directory already exists: {directory}' >&2; exit 1; fi"
+    )
+    suffix = (
+        f"\n\n{marker}\n"
+        "RUN " + json.dumps(["/bin/sh", "-ec", collision_check]) + "\n"
+        f"COPY --from={stage} {directory} {directory}\n"
+        "RUN " + json.dumps([
+            WORKER_PYTHON_EXECUTABLE, "-I", "-B", "-c", CONTAINER_RUNTIME_PROBE,
+        ]) + "\n"
+    )
+    rewritten = "".join(lines[:final_start]) + runtime_stage + "".join(lines[final_start:]) + suffix
+    dockerfile.write_text(rewritten, encoding="utf-8", newline="\n")
+
+
 def materialize_skillsbench_task(index_path: str | Path, task_id: str,
                                 destination: str | Path) -> Path:
     """将任务数据复制到新的持久准备目录，不修改原始数据。
@@ -137,6 +189,7 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     保留索引中的绝对路径，相对路径以索引所在目录为基准解析。
     仅在副本 task.md 中将 environment 改名为 sandbox，以适配 BenchFlow 0.7.8。
     副本中的 Dockerfile* 将 pip 和官方 Ubuntu/Debian APT 源切换为清华镜像。
+    主 Dockerfile 通过独立构建阶段复制框架 Python，不安装或升级任务系统包。
     """
     index_path = Path(index_path).resolve(strict=True)
     rows = json.loads(index_path.read_text(encoding="utf-8-sig"))["tasks"]
@@ -183,4 +236,7 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     for dockerfile in sorted((destination / "environment").rglob("Dockerfile*")):
         if dockerfile.is_file():
             _inject_package_mirrors(dockerfile)
+    main_dockerfile = destination / "environment" / "Dockerfile"
+    if main_dockerfile.is_file():
+        _inject_worker_runtime(main_dockerfile)
     return destination
