@@ -1,0 +1,16 @@
+# Shell 实验使用独立的 Agent 配置，通过 --agent 选择。
+[model]
+model = "deepseek/deepseek-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 120
+num_retries = 0
+
+[agent]
+runner = "harness.openhands.runner:execute"
+recorder = "agent_session_analyzer:OpenHandsRecorder"
+max_iterations = 100
+tool_timeout_sec = 120
+max_output_chars = 20000
+tools = ["terminal", "think", "finish"]
+# 省略 timeout_sec 时，遵循各任务的 agent.timeout_sec。

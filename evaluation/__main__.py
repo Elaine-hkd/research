@@ -1,4 +1,4 @@
-"""运行方式：python -m evaluation --config config/skillsbench-openhands.toml [--plan]。"""
+"""通过 --dataset、--environment、--agent、--evaluation 显式组合实验。"""
 
 import argparse
 import asyncio
@@ -13,15 +13,19 @@ from .experiment import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="在隔离的任务环境中评估智能体")
-    parser.add_argument("--config", type=Path, default=Path("config/skillsbench-openhands.toml"))
-    parser.add_argument("--name", help="实验名称，覆盖 config.name，支持中文")
+    parser.add_argument("--dataset", type=Path, required=True, help="数据集 TOML 文件")
+    parser.add_argument("--environment", type=Path, required=True, help="执行环境 TOML 文件")
+    parser.add_argument("--agent", type=Path, required=True, help="Agent 与模型 TOML 文件")
+    parser.add_argument("--evaluation", type=Path, required=True, help="测试条件与评分 TOML 文件")
+    parser.add_argument("--name", required=True, help="实验名称，支持中文；续跑时使用原名称")
     parser.add_argument("--plan", action="store_true", help="仅读取配置和任务，不调用模型或启动 Docker")
     parser.add_argument("--resume", action="store_true", help="续跑同名实验，归档忽略项并补抽，跳过已完成和 agent 超时项，重跑其余未完成项")
     parser.add_argument("--task", nargs="+", help="覆盖 dataset.task_ids")
     args = parser.parse_args()
-    config = load_config(args.config)
-    if args.name is not None:
-        config["name"] = args.name
+    config = load_config(
+        dataset=args.dataset, environment=args.environment, agent=args.agent,
+        evaluation=args.evaluation, name=args.name,
+    )
     if args.task is not None:
         config["dataset"]["task_ids"] = args.task
     output = experiment_directory(config)

@@ -7,6 +7,7 @@
 | 模块 | 职责 |
 | --- | --- |
 | `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
+| `evaluation/config.py` | 读取命令行选定的组件 TOML，解析各自路径并校验最终配置 |
 | `evaluation/dataset.py` | 共用任务加载入口，按数据集配置排除任务并随机采样 |
 | `evaluation/experiment.py` | 恢复原实验计划、判断跳过项、归档忽略项与旧尝试并独占实验目录 |
 | `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
@@ -17,15 +18,20 @@
 
 模型参数和 `[agent]` 的原生运行选项由所选 harness 解释；评测层不填入特定 SDK 的默认值。
 
-在 `E:\lornd\research` 使用现有 Python 3.12+ 环境。默认配置只选 `3d-scan-calc`，
-仅执行一次 `with-skill`。本次实验不运行 `no-skill`。
+在 `E:\lornd\research` 使用现有 Python 3.12+ 环境。默认从排除忽略项后的候选池抽取 10 个任务，
+只运行 `with-skill`，每个任务重复 3 次。
 
 ```powershell
 Set-Location E:\lornd\research
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation `
+  --dataset config\datasets\skillsbench.toml `
+  --environment config\environments\skillsbench.toml `
+  --agent config\agents\openhands.toml `
+  --evaluation config\evaluation\skillsbench.toml `
+  --name "skillsbench-openhands" --plan
 ```
 
-预期打印选定任务、模型、`conditions: ["with-skill"]`、各组件引用和 `planned_trials: 1`。
+预期打印 10 个选定任务、模型、`conditions: ["with-skill"]`、各组件引用和 `planned_trials: 30`。
 `--plan` 只读取配置和任务索引，
 不导入 OpenHands / BenchFlow SDK，不需要 API key，不调用模型或启动 Docker。
 
@@ -34,7 +40,7 @@ Set-Location E:\lornd\research
 使用支持工具调用的文本模型。宿主读取项目 `.env`（已有环境变量优先），从配置中的
 `model.api_key_env` 获取模型密钥，默认是 `DEEPSEEK_API_KEY`。
 
-默认工具名称与 `harness/openhands/main.py` 一致，复用原有四个注册中心工具接口。
+默认工具包含四个注册中心工具以及 terminal/read_file/write_file，详见 agent 组件配置。
 评测通过 `[environment].registry_url` 设置注册中心地址，默认 `http://127.0.0.1:5000`；
 搜索、加载和执行共用环境自有的注册中心客户端，不依赖宿主的 EXPOSED_SKILLS。
 注册中心需预先注册当前任务 skill_catalog 中的技能，并保持技能正文和资源与数据集一致；
@@ -50,7 +56,7 @@ Python 技能仍使用 `python_executable`（默认任务 PATH 中的 `python3`�
 旧 trial 副本需重新生成并构建，原始数据和历史结果不修改。
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "skillsbench-openhands"
 ```
 
 构建进度、OpenHands 事件类型和阶段切换会持续打印。每个 trial 使用新的 Compose 项目；
@@ -60,11 +66,40 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 ## 修改实验
 
-配置文件是 `config/skillsbench-openhands.toml`，其中路径相对配置文件所在目录解析。
+实验直接由命令行组合，不再读取总实验文件或 `[configs]` 引用。
+四个组件参数和 `--name` 均须显式提供，参数值为文件路径，CLI 路径相对当前执行目录解析：
+
+```powershell
+python -m evaluation --dataset config/datasets/skillsbench.toml --environment config/environments/skillsbench.toml --agent config/agents/dsh.toml --evaluation config/evaluation/skillsbench.toml --name "skillsbench-dsh" --plan
+```
+
+| 配置文件（相对项目根目录） | 负责内容 |
+| --- | --- |
+| `config/datasets/skillsbench.toml` | `[dataset]`：索引、任务选择、忽略列表、采样、准备和设置入口 |
+| `config/environments/skillsbench.toml` | `[environment]`：环境工厂、注册中心地址、启动和清理预算；OpenHands 与 dsh 共用 |
+| `config/environments/skillsbench-shell-only.toml` | shell 实验的环境参数，保留不配置注册中心客户端的原行为 |
+| `config/agents/openhands.toml`、`config/agents/dsh.toml` | `[model]` 和 `[agent]`：各 harness 的模型路由、runner、recorder、工具和预算 |
+| `config/agents/openhands-shell-only.toml` | shell + think/finish 的 OpenHands 模型、工具和预算 |
+| `config/evaluation/skillsbench.toml` | 输出目录、条件、重复次数、通过阈值和 `[evaluator]` 评分函数 |
+
+新增忽略任务只修改共享数据集文件的 `exclude_task_ids`，所有选择此数据集的实验都会读取。
+原 dsh 中的 `pedestrian-traffic-counting`、`dynamic-object-aware-egomotion` 已迁到此处，
+也会用于 OpenHands 和 shell 实验；新实验的候选任务池因此与原来这两个配置有所不同。
+
+`dataset.index`、`output_dir` 相对**定义该字段的 TOML 文件**解析，不受执行目录影响。
+组件文件只允许定义其负责的配置项，不引用其他组件。
+模型和 agent 的其余原生参数仍交给各 harness 解释。
+
+组件分别提供不同字段，无需继承或递归覆盖。更换某项配置只替换对应的命令行参数；
+例如切换到 dsh 只更换 `--agent`，shell 对比则选择 shell 专用的 agent 和 environment 文件。
+`--task` 仍可覆盖数据集文件中的 `task_ids`；忽略列表、采样数量和种子仍对所选候选池生效。
+`load_config(dataset=..., environment=..., agent=..., evaluation=..., name=...)` 返回原有配置字典结构，
+调度和 manifest 继续使用完整的实际配置。文件拆分本身不改变续跑身份；仍只允许调整忽略列表，
+其他实验设置须一致。旧的 `--config` 参数及三个 `config/skillsbench-*.toml` 已移除。
 
 | 要改变的内容 | 配置项 |
 | --- | --- |
-| 本次实验名称 | 顶层 `name`，或单次命令的 `--name` |
+| 本次实验名称 | 命令行 `--name` |
 | 模型及服务地址 | `[model] model`、`base_url`、`api_key_env` |
 | 模型采样与输出预算 | `[model] temperature`、`max_output_tokens`、`reasoning_effort` 等 OpenHands LLM 参数 |
 | 数据集及任务集合 | `[dataset] index`、`task_ids`、`loader`、`prepare` |
@@ -85,16 +120,16 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 每次运行可使用同一份配置并指定实验名，支持中文和内部空格：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "清华源耗时对比" --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "清华源耗时对比" --plan
 ```
 
 `--plan` 输出 `name` 与完整的 `experiment_dir`，只预览，不创建目录、启动 Docker 或调用模型。
 移除 `--plan` 才开始实际实验，可能构建镜像并产生模型调用费用。
-没有传 `--name` 时使用 TOML 顶层的 `name`；它现在表示实验目录最后一级的名称。
+`--name` 必须显式提供，表示实验目录最后一级的名称。
 相同 benchmark/harness/model 下同名目录已存在时，默认报错；加 `--resume` 可续跑，
 不会自动增加时间后缀。
 实验名不能包含路径分隔符、Windows 非法文件名字符、首尾空格或末尾句点；拒绝 `.`、`..`
-和 Windows 保留设备名。原有配置中的默认 name 保留，需要另一次实验时更换名称。
+和 Windows 保留设备名。需要另一次实验时更换 `--name`。
 
 ## 续跑同名实验
 
@@ -103,7 +138,7 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 ```powershell
 Set-Location E:\lornd\research
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "10" --resume --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "10" --resume --plan
 ```
 
 `skipped_trials` 是已完成或 agent 总预算超时而跳过的数量，`pending_trials` 和 `pending_trial_ids`
@@ -117,7 +152,7 @@ Set-Location E:\lornd\research
 确认清单后移除 `--plan`：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --name "10" --resume
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "10" --resume
 ```
 
 实际续跑需要原实验的依赖、模型凭据、注册中心和 Docker 环境，会对待运行项重新调用模型，
@@ -163,15 +198,18 @@ Set-Location E:\lornd\research
 
 删除 `dataset.task_ids` 一行选择完整索引。也可单次覆盖任务集合：
 
+下面指定两个候选任务；执行前需在所选数据集配置中移除 `sample_size` 和 `seed`，
+或将 `sample_size` 调整为不超过排除后的候选数量。`--task` 不会取消采样和忽略规则。
+
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --task 3d-scan-calc citation-check
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "指定候选任务" --task 3d-scan-calc citation-check --plan
 ```
 
-要从完整索引随机抽取 10 个任务，删除 `[dataset]` 中的 `task_ids` 行，并设置：
+要从完整索引随机抽取 10 个任务，在 `config/datasets/skillsbench.toml` 中不设置 `task_ids`，并配置：
 
 ```toml
 [dataset]
-index = "../data/task/skillsbench.json"
+index = "../../data/task/skillsbench.json"
 exclude_task_ids = ["pedestrian-traffic-counting"]
 sample_size = 10
 seed = 42
@@ -209,35 +247,36 @@ verifier 超时、服务、环境变量和 hardening 由任务原配置及 Bench
 默认使用注册中心工具。原 shell 配置继续保留，其任务、模型、with-skill 条件、重复次数
 和预算相同，便于需要时另行比较：
 
-- `config/skillsbench-shell-only.toml`：shell + 本地 think/finish。
-- `config/skillsbench-openhands.toml`：与 main.py 相同的四个 registry 工具 + 本地 think/finish。
+- `--agent config/agents/openhands-shell-only.toml`：shell + 本地 think/finish，搭配 shell 专用环境配置。
+- `--agent config/agents/openhands.toml`：四个 registry 工具 + terminal/read_file/write_file。
 
 在项目根目录先看计划，再分别执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml --plan
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml --plan
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-shell-only.toml
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench-openhands.toml
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench-shell-only.toml --agent config\agents\openhands-shell-only.toml --evaluation config\evaluation\skillsbench.toml --name "skillsbench-openhands-shell-only" --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "skillsbench-openhands" --plan
 ```
 
-plan 输出应分别列出 3 和 6 个工具名称，各计划 1 个 trial。plan 通过公共 validate_tools
+移除 `--plan` 执行实际实验，会启动 Docker 并可能产生模型调用费用。
+
+plan 输出应分别列出 3 和 7 个工具名称，默认各计划 30 个 trial。plan 通过公共 validate_tools
 检查名称格式和重复项，不导入工具、不验证原生实现、注册中心连接或容器依赖。
-增减工具直接编辑各自的 `[agent].tools`，新增实现方法见
+OpenHands 默认工具在 `config/agents/openhands.toml` 的 `[agent].tools` 中修改；
+shell 实验编辑 `config/agents/openhands-shell-only.toml` 的对应列表。新增实现方法见
 [公共工具加载说明](../harness/openhands/README.md)。
 
 工具名称由公共 tools.loader.load_tools 交给所选 harness 的适配代码；配置不再填写
 OpenHands 类路径。当前四个 registry 工具在 OpenHands、dsh 都有实现，容器 shell、文件
-工具及本地 think/finish 只有 OpenHands 实现，给 dsh 选择这些名称会明确报错。
+工具在两个 harness 均有实现；本地 think/finish 当前只有 OpenHands 实现，给 dsh 选择这两个名称会明确报错。
 evaluation/runner.py 从配置中取出工具名称，显式传给 harness 的 tools 参数，
 其余迭代和超时预算沿用原接口；harness 不通过 settings 读取工具。
 
 按相同 task_id、condition、repeat 比较两个实验的 reward/passed、duration_sec、
 agent.usage 的 token/cost 和 tool_calls_by_name。summary 仍只在各实验内按技能条件
-汇总，不把两个实验自动合并。单次结果会受模型采样影响，需要重复时同步修改两份 repeats。
+汇总，不把两个实验自动合并。单次结果会受模型采样影响，需要重复时修改共享测试配置中的 repeats。
 两份配置都在 trial 容器执行，但操作能力不同：shell 可以执行任意命令，execute_resource
 只能运行当前任务允许的注册中心技能资源，不能把得分差异只归因于工具接口。
-后续修改其他实验参数时需保持两份配置一致。
+数据集和测试设置来自共享文件；两个 agent 文件分别维护自己的模型和预算，比较时应保持这些条件一致。
 
 ## 执行与评分
 

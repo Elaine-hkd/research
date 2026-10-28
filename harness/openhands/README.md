@@ -87,19 +87,22 @@ dsh 单任务入口调用公共 `harness/runner.py`，选择 `harness.dsh.runner
 
 ## 评测配置和记录
 
-config/skillsbench.toml 的 [agent].tools 使用名称，例如：
+`config/agents/openhands.toml` 的 `[agent].tools` 使用名称，例如：
 
 ```toml
-tools = ["search_skills", "load_skill", "load_resource", "execute_resource", "think", "finish"]
+tools = ["search_skills", "load_skill", "load_resource", "execute_resource", "terminal", "read_file", "write_file"]
 ```
 
 evaluation/runner.py 取出该列表后显式传给 runner 的 tools 参数。配置和预算仍由现有
 评测配置文件管理；不会把整份配置作为工具 settings 传入 harness。
-默认列表与 main.py 一致，复用原有四个 registry 实现；think/finish 也沿用原有实现。
+默认列表复用原有四个 registry 实现及任务环境中的终端、文件工具。
+实验命令通过 `--dataset`、`--environment`、`--agent`、`--evaluation` 直接选择组件 TOML，
+通过 `--name` 指定实验名。shell 实验选择 `config/agents/openhands-shell-only.toml`，
+工具为 terminal/think/finish；需要比较模型和预算时同步核对两个 agent 配置。
 评测使用 [environment].registry_url 创建环境自有的 RegistryClient；搜索、加载和执行
 共用该地址和当前任务的技能范围，不修改宿主全局环境变量。
 SkillsBench setup 将范围限制在该任务的 skill_catalog；注册中心须预先注册对应技能。
-本次配置仅运行 with-skill，默认一个任务、一次重复，共 1 个 trial。
+共享数据集和测试配置默认选择 10 个任务，仅运行 with-skill、每任务重复 3 次，共 30 个 trial。
 独立 run_task 仍从 SKILL_REGISTRY_URL、EXPOSED_SKILLS 读取配置。
 
 容器执行沿用环境层现有的 UTF-8 文本资源下载协议，未增加二进制资源下载；镜像须提供
@@ -123,11 +126,11 @@ settings 仍只是原有运行参数，工具保持单独的 tools 参数。
 最小检查是在项目根目录运行：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m evaluation --config config\skillsbench.toml --plan
+.\.venv\Scripts\python.exe -X utf8 -m evaluation --dataset config\datasets\skillsbench.toml --environment config\environments\skillsbench.toml --agent config\agents\openhands.toml --evaluation config\evaluation\skillsbench.toml --name "skillsbench-openhands" --plan
 .\.venv\Scripts\python.exe -X utf8 -c "from tools.loader import load_tools; print(load_tools('dsh', ['search_skills']))"
 ```
 
-预期分别显示六个工具名和一个 trial，以及包含 registry.patch.yml 与 HARNESS_TOOLS 的
+预期分别显示七个工具名和 30 个 trial，以及包含 registry.patch.yml 与 HARNESS_TOOLS 的
 普通字典。第二条不启动 dsh、不读取模型密钥。完整运行需要现有 SDK、模型和 registry；
 任务评测另需可运行的 Docker/BenchFlow 环境。本次只检查源码、diff 和静态语法，未运行测试、
 构建、导入探测、模型请求或 Docker。

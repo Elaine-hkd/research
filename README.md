@@ -1,6 +1,17 @@
 # Research
 
-SkillsBench 评估入口：`python -m evaluation --config config/skillsbench-openhands.toml`。
+SkillsBench 评估入口直接选择组件：
+
+```powershell
+python -m evaluation `
+  --dataset config/datasets/skillsbench.toml `
+  --environment config/environments/skillsbench.toml `
+  --agent config/agents/openhands.toml `
+  --evaluation config/evaluation/skillsbench.toml `
+  --name "skillsbench-openhands" --plan
+```
+
+`--plan` 仅读取配置和任务；移除后实际运行，会启动 Docker 并可能产生模型调用费用。
 
 通用 `evaluation` 调度实验；`datasets/skillsbench.py` 负责数据准备、技能注入和原生评分；
 `harness/runner.py` 提供公共 run_agent，管理配置的 recorder 和公共参数检查；
@@ -8,12 +19,19 @@ SkillsBench 评估入口：`python -m evaluation --config config/skillsbench-ope
 `harness/diagnostics.py` 提供两者共用的异常归档：保留首次失败、附加收尾错误，统一写入事件、结果和 recorder trace。
 配置通过 `module:function` 直接组合组件，无需为每个 harness 编写 evaluation 文件。
 
-当前 SkillsBench 配置使用 OpenHands 和 `DockerEnvironment`，工具选择与
-`harness/openhands/main.py` 一致：四个已有 registry 工具及 think/finish。
+`--dataset`、`--environment`、`--agent`、`--evaluation` 分别选择 `config/datasets/`、
+`config/environments/`、`config/agents/` 和 `config/evaluation/` 中的 TOML 文件。
+任务忽略列表统一在 `config/datasets/skillsbench.toml` 的 `exclude_task_ids` 中维护；
+模型随 agent 配置，条件、重复次数和评分方法在测试配置中维护。
+实验名称由 `--name` 指定，具体规则见 [修改实验](evaluation/README.md#修改实验)。
+
+当前 SkillsBench 配置支持 OpenHands、dsh 和 `DockerEnvironment`，两个默认 agent
+均选择四个 registry 工具以及 terminal/read_file/write_file。
 本次只运行 `with-skill`：注册中心负责技能读取，`execute_resource` 在当前 trial 容器
 执行下载后的脚本。独立 `main.py` 未传环境时仍使用服务端执行。
-`config/skillsbench-shell-only.toml` 保留任务容器 shell 配置。dsh 已提供相同调用接口，
-其 registry 工具尚未绑定 trial 容器。
+`config/agents/openhands-shell-only.toml` 保留任务容器 shell + think/finish 配置，
+搭配 `config/environments/skillsbench-shell-only.toml` 使用。
+dsh 通过每个 trial 的桥接接口将注册中心资源执行、终端和文件操作绑定到任务容器。
 
 配置、使用方法、结果格式和扩展接口见 [evaluation/README.md](evaluation/README.md)。
 环境与技能执行接口见 [environment/README.md](environment/README.md)。

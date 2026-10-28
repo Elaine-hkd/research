@@ -1,0 +1,28 @@
+[model]
+model = "deepseek/deepseek-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 120
+num_retries = 0
+# 可选 SDK 字段，需所选模型支持：
+# temperature = 0.0
+# max_output_tokens = 8192
+# reasoning_effort = "high"
+
+[agent]
+runner = "harness.openhands.runner:execute"
+recorder = "agent_session_analyzer:OpenHandsRecorder"
+max_iterations = 100
+tool_timeout_sec = 120
+max_output_chars = 20000
+# execute_resource 下载所选资源，并在本次试验环境中执行。
+tools = [
+    "search_skills",
+    "load_skill",
+    "load_resource",
+    "execute_resource",
+    "terminal",
+    "read_file",
+    "write_file",
+]
+# 省略 timeout_sec 时，遵循各任务的 agent.timeout_sec。

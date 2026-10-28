@@ -1,0 +1,27 @@
+[model]
+# 保留原生 dsh 路由；配对比较时需确认服务端模型版本一致。
+provider = "deepseek-official"
+model = "deepseek-v4-flash"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+# max_tokens = 8192
+# reasoning_effort = "high"
+
+[agent]
+runner = "harness.dsh.runner:execute"
+recorder = "agent_session_analyzer:DshRecorder"
+# 省略 dsh_home 时，使用本项目的 config/dsh 目录。
+profile = "sdk-minimal"
+tool_timeout_sec = 120
+max_output_chars = 20000
+tools = [
+    "search_skills",
+    "load_skill",
+    "load_resource",
+    "execute_resource",
+    "terminal",
+    "read_file",
+    "write_file",
+]
+# 省略 timeout_sec 时，遵循各任务的 agent.timeout_sec。
+# OpenHands 的 max_iterations 不属于 DeepSeekHarnessConfig 配置项。

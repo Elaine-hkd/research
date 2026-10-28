@@ -1,0 +1,5 @@
+# 保留原 shell 实验不配置注册中心客户端的环境设置。
+[environment]
+factory = "datasets.skillsbench:create_environment"
+startup_timeout = 1800
+cleanup_timeout = 180

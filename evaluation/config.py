@@ -1,4 +1,4 @@
-"""读取 TOML 实验文件，解析普通可导入函数的引用。"""
+"""读取命令行指定的组件 TOML，组合并校验实验配置。"""
 
 from pathlib import Path
 import re
@@ -6,6 +6,35 @@ import tomllib
 
 from tools.loader import validate_tools
 from harness.runner import load_function
+
+
+_COMPONENT_KEYS = {
+    "dataset": {"dataset"},
+    "environment": {"environment"},
+    "agent": {"agent", "model"},
+    "evaluation": {"output_dir", "conditions", "repeats", "pass_threshold", "evaluator"},
+}
+
+
+def _read_toml(path: Path) -> dict:
+    """先按字段所在文件解析路径，避免组件移动后改变相对路径含义。"""
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"TOML 配置格式错误：{path}：{exc}") from exc
+    path_fields = [(config, "output_dir")]
+    dataset = config.get("dataset")
+    if isinstance(dataset, dict):
+        path_fields.append((dataset, "index"))
+    for section, key in path_fields:
+        if key not in section:
+            continue
+        value = section[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{path} 中的 {key} 必须为非空路径字符串")
+        # 完整配置校验时再检查索引是否存在。
+        section[key] = str((path.parent / value).resolve())
+    return config
 
 
 def function_reference(value, name: str) -> None:
@@ -40,15 +69,30 @@ def experiment_directory(config: dict) -> Path:
     return Path(config["output_dir"]) / benchmark / harness / model / name
 
 
-def load_config(path: Path) -> dict:
-    path = Path(path).resolve(strict=True)
-    config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    allowed = {"name", "output_dir", "conditions", "repeats", "pass_threshold",
-               "dataset", "model", "agent", "evaluator", "environment"}
-    if extra := config.keys() - allowed:
-        raise ValueError(f"未知实验配置项：{sorted(extra)}")
+def load_config(*, dataset: Path, environment: Path, agent: Path,
+                evaluation: Path, name: str) -> dict:
+    """显式选择四个组件文件和实验名，返回调度与快照共用的配置字典。"""
+    component_paths = {
+        "dataset": dataset, "environment": environment,
+        "agent": agent, "evaluation": evaluation,
+    }
+    config = {"name": name}
+    for component_name, component_path in component_paths.items():
+        component_path = Path(component_path).resolve(strict=True)
+        component = _read_toml(component_path)
+        allowed = _COMPONENT_KEYS[component_name]
+        if extra := component.keys() - allowed:
+            raise ValueError(
+                f"{component_path} 包含不属于 {component_name} 组件的配置项：{sorted(extra)}"
+            )
+        if component_name == "evaluation":
+            component.setdefault("output_dir", str((component_path.parent / "../logs/evaluation").resolve()))
+        # 各组件负责的顶层字段互不重叠，无需递归合并或覆盖规则。
+        config.update(component)
+    for section in ("dataset", "model", "agent", "evaluator", "environment"):
+        if not isinstance(config.get(section), dict):
+            raise ValueError(f"{section} 必须在对应组件文件中定义为配置表")
     _directory_component(config["name"], "实验名称")
-    config["output_dir"] = str((path.parent / config.get("output_dir", "../logs/evaluation")).resolve())
     config.setdefault("repeats", 1)
     if type(config["repeats"]) is not int or config["repeats"] < 1:
         raise ValueError("repeats 必须为正整数")
@@ -64,7 +108,7 @@ def load_config(path: Path) -> dict:
     dataset = config["dataset"]
     if extra := dataset.keys() - {"index", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
         raise ValueError(f"未知数据集配置项：{sorted(extra)}")
-    dataset["index"] = str((path.parent / dataset["index"]).resolve(strict=True))
+    dataset["index"] = str(Path(dataset["index"]).resolve(strict=True))
     if "task_ids" in dataset and (not isinstance(dataset["task_ids"], list)
                                 or not all(isinstance(item, str) for item in dataset["task_ids"])):
         raise ValueError("dataset.task_ids 必须为任务 ID 列表")

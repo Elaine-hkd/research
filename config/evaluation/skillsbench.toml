@@ -1,0 +1,11 @@
+# 测试条件、重复次数、成功阈值和评分方法由所有 SkillsBench 实验共用。
+# 路径相对此文件；结果仍按 benchmark/harness/model/name 存放。
+output_dir = "../../logs/exp"
+
+conditions = ["with-skill"]
+repeats = 3
+
+pass_threshold = 1.0
+
+[evaluator]
+function = "datasets.skillsbench:evaluate"
