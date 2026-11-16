@@ -37,6 +37,12 @@ dsh 通过每个 trial 的桥接接口将注册中心资源执行、终端和文
 环境与技能执行接口见 [environment/README.md](environment/README.md)。
 统一实验格式、组件边界、结果语义和恢复规则见 [Agent 实验原则](EXPERIMENT_PRINCIPLES.md)。
 
+如果项目需要直接调用模型并记录费用，可以单独安装 `research-llm`。调用、单价配置和明细导出见 [大模型调用和项目用量](llm/README.md)。
+OpenHands、dsh 在 `[agent]` 下用 `cost_tracking = true/false` 控制费用统计，默认配置已开启。
+运行前请设置 `RESEARCH_PROJECT_ID`、`RESEARCH_USER_ID`，也可以写入项目根目录的 `.env`。
+账本固定在项目根目录的 `logs/model-usage.sqlite3`；开启时还会在 agent 输出目录保存价格快照与 `usage.jsonl` 审核明细。
+模型价格统一在 `llm/src/research_llm/prices.toml` 中配置。
+
 ## 代码思路
 
 尝试构建 dataset(environment) -> harness(model) --> evaluation --> visualization 全流程可配置，可替换。

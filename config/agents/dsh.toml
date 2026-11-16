@@ -10,6 +10,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 [agent]
 runner = "harness.dsh.runner:execute"
 recorder = "agent_session_analyzer:DshRecorder"
+cost_tracking = true
 # 省略 dsh_home 时，使用本项目的 config/dsh 目录。
 profile = "sdk-minimal"
 tool_timeout_sec = 120

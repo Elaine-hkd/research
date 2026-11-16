@@ -13,7 +13,7 @@ run_openhands(task, exposed_skills=["rpa-email"], tools=selected)
 run_dsh(task, exposed_skills=["rpa-email"], tools=selected)
 ```
 
-两种入口均提供 run_task(task, exposed_skills=None, *, tools=None)。省略 tools 时，
+两种入口均提供 run_task(task, exposed_skills=None, *, tools=None, cost_tracking=True)。省略 tools 时，
 OpenHands 使用已有四个 registry 工具和本地 think/finish；dsh 使用已有四个 registry
 工具并保留其原生运行流程。显式 tools=[] 表示不加载自定义工具，不会回退到默认列表。
 
@@ -121,13 +121,45 @@ usage.tool_calls_by_name 记录工具清单与模型发出的调用次数。实�
 `[agent].recorder = "agent_session_analyzer:OpenHandsRecorder"` 选择记录器。
 没有单独的 evaluation/OpenHands 桥接模块。公共 run_agent 接收 instruction、model、settings、
 tools、environment、output_dir、timeout_sec、skill_catalog、metadata，返回值定义在 harness/base.py。
-settings 仍只是原有运行参数，工具保持单独的 tools 参数。
+settings 中的 `cost_tracking` 是费用统计开关，由公共入口处理，其余仍是原生运行参数，工具保持单独的 tools 参数。
 公共入口按配置在 output_dir/trace 创建和关闭 recorder，metadata 原样交给记录器。
 省略 recorder 不录制标准 trace；显式传入 recorder 实例时，其生命周期仍由调用方管理。
 原生 execute 不创建或关闭 recorder，只保留各 SDK 所需的接入方式和安全收尾。
-两个 run_task 的参数保持不变，内部均使用公共入口；独立运行的标准 trace 也放在输出目录的 trace/ 下，
+两个 run_task 均使用公共入口，并支持 `cost_tracking=False` 关闭默认开启的费用统计；独立运行的标准 trace 也放在输出目录的 trace/ 下，
 同时保存该 harness 的原生事件和结果。SDK 参数复用其校验，仅项目自定义的必要约束留在 execute 内。
 数据集准备、技能注入和评分位于 datasets/skillsbench.py，不进入 harness。
+
+两个独立入口每次调用都会在项目根目录的 `logs/harness/<agent>/` 下创建运行目录，
+名称由本地时间（含微秒）和随机后缀组成，并在启动时打印绝对路径。例如：
+
+```text
+logs/
+  model-usage.sqlite3
+  harness/
+    openhands/
+      20261116-213701-123456-a1b2c3d4/
+        trace/
+        events.jsonl
+        tools.json
+        result.json
+        usage-config.json
+        usage.jsonl
+    dsh/
+      <本次运行目录>/
+```
+
+`trace/` 内保存本次运行的标准会话记录，其他文件由相应步骤生成，失败较早时可能不齐全。
+同一次运行的子会话也留在这个目录内。共享账本继续放在 `logs/model-usage.sqlite3`。
+已有日志保持原位，evaluation 继续使用各 trial 的 `agent/` 目录。公共 `run_agent(output_dir=...)`
+仍直接使用调用方指定的路径；只有独立 `run_task()` 入口自动分配新的运行目录。
+
+默认配置和两个独立 `run_task()` 入口均启用 `research-llm` 入账。公共入口在 SDK 收尾后
+逐条导入标准 trace 的 `model.attempt`，保存价格快照、使用人和估算金额；原始 trace 不改写。
+每个输出目录新增 `usage-config.json`、`usage.jsonl`，`result.usage.accounting` 给出按币种汇总。
+agent TOML 在 `[agent]` 下用 `cost_tracking = true/false` 控制费用统计；项目和使用人读取
+`RESEARCH_PROJECT_ID`、`RESEARCH_USER_ID`，也支持填写在项目根目录的 `.env`。
+两个值都必须填写，账本固定在项目根目录的 `logs/model-usage.sqlite3`，价格统一使用包内配置。
+关闭入账时，原生 SDK 指标及 trace 继续保存，详见 [用量与价格说明](../../llm/README.md)。
 
 最小检查是在项目根目录运行：
 

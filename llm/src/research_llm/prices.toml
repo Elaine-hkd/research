@@ -1,0 +1,19 @@
+# 团队配置的每百万 token 单价；省略缓存单价时，缓存按普通输入计价。
+[models.deepseek-flash]
+currency = "CNY"
+input = "2"
+output = "8"
+cache_read = "0.04"
+aliases = ["deepseek-v4-flash", "deepseek/deepseek-flash", "deepseek/deepseek-v4-flash"]
+
+[models.deepseek-flash.off_peak]
+# 每天按北京时间判断峰段，结束边界不包含在峰段中。
+peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
+multiplier = "0.5"
+
+[models."qwen-3.8-max"]
+currency = "CNY"
+input = "12"
+output = "36"
+cache_read = "1"
+aliases = ["openai/qwen-3.8-max", "qwen-3.8", "openai/qwen-3.8"]

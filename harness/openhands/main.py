@@ -1,11 +1,12 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from litellm.types.utils import Usage
 from openhands.sdk.llm.utils.telemetry import Telemetry
 
-from harness.runner import run_agent
+from harness.runner import create_run_directory, run_agent
 from tools.loader import REGISTRY_TOOLS
 
 
@@ -35,11 +36,15 @@ registry_address = "http://127.0.0.1:5000"
 
 
 def run_task(task, exposed_skills: list[str] | None = None, *,
-             tools=None):
+             tools=None, cost_tracking: bool = True):
     os.environ["EXPOSED_SKILLS"] = json.dumps(exposed_skills or [], ensure_ascii=False)
     os.environ.setdefault("SKILL_REGISTRY_URL", registry_address)
 
     selected = [*REGISTRY_TOOLS, "think", "finish"] if tools is None else tools
+    output_dir = create_run_directory(
+        Path(__file__).resolve().parents[2] / "logs" / "harness" / "openhands",
+    )
+    print("运行目录：", output_dir)
 
     result = asyncio.run(run_agent(
         runner="harness.openhands.runner:execute",
@@ -50,8 +55,8 @@ def run_task(task, exposed_skills: list[str] | None = None, *,
             "api_key_env": "DEEPSEEK_API_KEY",
             "base_url": "https://api.deepseek.com",
         },
-        settings={}, tools=selected, workspace=os.getcwd(),
-        output_dir="./logs/harness/openhands", timeout_sec=None,
+        settings={"cost_tracking": cost_tracking}, tools=selected, workspace=os.getcwd(),
+        output_dir=output_dir, timeout_sec=None,
     ))
     print(result.trace_path)
     return result

@@ -129,6 +129,13 @@ def load_config(*, dataset: Path, environment: Path, agent: Path,
         function_reference(agent["recorder"], "agent.recorder")
     if "tools" in agent:
         agent["tools"] = validate_tools(agent["tools"])
+    if "usage" in agent:
+        raise ValueError("请删除旧的 agent.usage，并在 [agent] 下设置 cost_tracking = true/false")
+    cost_tracking = agent.get("cost_tracking", False)
+    if type(cost_tracking) is not bool:
+        raise ValueError("agent.cost_tracking 必须为 true/false 布尔开关")
+    if cost_tracking and not agent.get("recorder"):
+        raise ValueError("启用 agent.cost_tracking 需要配置 agent.recorder")
     evaluator = config.setdefault("evaluator", {})
     if extra := evaluator.keys() - {"function"}:
         raise ValueError(f"未知评分器配置项：{sorted(extra)}")

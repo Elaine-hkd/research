@@ -278,6 +278,16 @@ agent.usage 的 token/cost 和 tool_calls_by_name。summary 仍只在各实验�
 只能运行当前任务允许的注册中心技能资源，不能把得分差异只归因于工具接口。
 数据集和测试设置来自共享文件；两个 agent 文件分别维护自己的模型和预算，比较时应保持这些条件一致。
 
+默认 agent 配置在 `[agent]` 下用 `cost_tracking = true` 启用费用统计，改为 `false` 或省略时关闭。
+项目与使用人分别读取 `RESEARCH_PROJECT_ID`、`RESEARCH_USER_ID`，也可以写入项目根目录的
+`.env`；进程环境变量优先。开启时两个值都必须填写，缺失会在模型请求前报错。
+价格集中在 `llm/src/research_llm/prices.toml`，账本固定在项目根目录的
+`logs/model-usage.sqlite3`，不受工作目录和 agent TOML 位置影响。
+每个 trial 的 `agent/usage-config.json` 保存价格表快照，`agent/usage.jsonl` 保存逐次用量、
+本次单价、金额和实验标识。关闭时不写这些文件和账本，原生 SDK 指标及 trace 继续保留。
+团队配置的人民币金额读取 `agent.usage.accounting.estimated_totals.CNY`，SDK 的 `cost_usd`
+仍保留原含义。按人查询和 CSV 导出见 [用量与价格说明](../llm/README.md)。
+
 ## 执行与评分
 
 ```text
@@ -459,7 +469,7 @@ run_agent=..., evaluate=..., create_environment=...)`。
 reward 统一归一到 [0, 1]；额外指标放在 metrics，runner 不解释其内部结构。
 比如更换成 LLM judge，只需要实现评分函数并修改 evaluator.function；原模型配置仍控制 solver。
 `[agent]` 中的 runner、recorder 和 tools 会被取出，其余字段仍作为 settings 字典交给公共入口；
-公共入口取出并检查 timeout_sec，再把其余字段展开为 execute 的关键字参数。
+公共入口取出并检查 cost_tracking、timeout_sec，再把其余字段展开为 execute 的关键字参数。
 OpenHands 用普通函数签名拒绝未知选项，dsh 将其余原生选项交给 SDK 构造函数，
 不再重复维护 SDK 参数白名单。没有增加 settings 配置层。
 `[environment]` 中 factory 被取出，其余字段传给环境工厂。

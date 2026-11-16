@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-llm"
+version = "0.1.0"
+description = "Call language models and track project-level token costs."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["litellm==1.101.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+research_llm = ["prices.toml"]

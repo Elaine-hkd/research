@@ -9,6 +9,7 @@ num_retries = 0
 [agent]
 runner = "harness.openhands.runner:execute"
 recorder = "agent_session_analyzer:OpenHandsRecorder"
+cost_tracking = true
 max_iterations = 100
 tool_timeout_sec = 120
 max_output_chars = 20000
