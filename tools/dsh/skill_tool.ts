@@ -105,18 +105,19 @@ export function apply(ctx: Context) {
             return result
         }
         if (tool === 'search_skills') {
-            url.searchParams.set('query', args.query ?? '')
-            url.searchParams.set('exposed_skills', JSON.stringify(exposedSkills))
-        } else {
-            url.searchParams.set('skill_name', args.name)
-            if (tool === 'load_resource') url.searchParams.set('relative_path', args.relative_path)
-        }
-        const response = await fetch(url, { signal })
-        if (tool === 'search_skills') {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: args.query ?? '', exposed_skills: exposedSkills }),
+                signal,
+            })
             const result = await response.text()
             if (!response.ok) throw new Error(`search_skills 请求失败，HTTP ${response.status}: ${result}`)
             return result
         }
+        url.searchParams.set('skill_name', args.name)
+        if (tool === 'load_resource') url.searchParams.set('relative_path', args.relative_path)
+        const response = await fetch(url, { signal })
         if (!response.ok) throw new Error(`注册中心请求失败，HTTP ${response.status}`)
         return JSON.stringify(await response.json())
     }

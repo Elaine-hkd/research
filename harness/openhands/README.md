@@ -39,6 +39,12 @@ tools 名称列表 → validate_tools → 导入 tools.<harness>.toolset
 原生导入与注册留在适配器内：OpenHands 返回 SDK Tool 列表；dsh 返回 DeepSeekHarness
 构造函数需要的 patches/env 字典。公共入口不导入任何 SDK 类型，也没有新增配置类或工厂类。
 
+`search_skills` 使用 `POST /search_skills`，JSON 请求体包含 `query` 字符串和
+`exposed_skills` 数组。OpenHands、dsh 的独立入口和任务环境的 `RegistryClient`
+均遵循该协议；技能范围仍由调用方决定，工具参数和返回结构保持原样。
+`load_skill`、`load_resource` 继续使用 GET。OpenHands 共用的 POST helper 提交 JSON，
+注册中心的 `execute_resource` 也支持这种请求体。
+
 | 工具名称 | OpenHands | dsh |
 | --- | --- | --- |
 | search_skills / load_skill / load_resource / execute_resource | 已有 Python 实现 | 已有 registry 插件 |

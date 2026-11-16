@@ -41,7 +41,7 @@ class RegistryClient:
                 # 部分注册中心将 [] 视为不筛选，因此在本地强制返回空结果。
                 if not self.allowed:
                     return {"count": 0, "skills": []}
-                params["exposed_skills"] = json.dumps(sorted(self.allowed))
+                params["exposed_skills"] = sorted(self.allowed)
         elif endpoint in {"/load_skill", "/load_resource"}:
             skill_name = params.get("skill_name")
             if not isinstance(skill_name, str) or not skill_name.strip():
@@ -50,9 +50,18 @@ class RegistryClient:
                 raise ValueError(f"未知或未获准访问的技能：{skill_name!r}")
         else:
             raise ValueError(f"不支持的注册中心读取端点：{endpoint!r}")
-        url = self.url + endpoint + "?" + urlencode(params)
+        if endpoint == "/search_skills":
+            request = Request(
+                self.url + endpoint,
+                data=json.dumps(params, ensure_ascii=False).encode("utf-8"),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                method="POST",
+            )
+        else:
+            url = self.url + endpoint + "?" + urlencode(params)
+            request = Request(url, headers={"Accept": "application/json"})
         try:
-            with urlopen(Request(url, headers={"Accept": "application/json"}), timeout=self.timeout) as response:
+            with urlopen(request, timeout=self.timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             raise ExecutionError(f"注册中心 {endpoint} HTTP {exc.code}") from exc
