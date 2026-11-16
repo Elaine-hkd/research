@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       dsh-research-tools:
-        specifier: file:E:/lornd/research/tools/dsh
+        specifier: file:../../../../tools/dsh
         version: file:../../../../tools/dsh
 
 packages:

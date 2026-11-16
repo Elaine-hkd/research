@@ -2,7 +2,7 @@
   "name": "dsh-profile-sdk-minimal",
   "private": true,
   "dependencies": {
-    "dsh-research-tools": "file:E:/lornd/research/tools/dsh"
+    "dsh-research-tools": "file:../../../../tools/dsh"
   },
   "dsh": {
     "profile": {

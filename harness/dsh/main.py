@@ -9,11 +9,13 @@ load_dotenv()
 from harness.runner import create_run_directory, run_agent
 
 
-DS_HOME = "E:\\lornd\\research\\config\\dsh"
-WORKSPACE_ROOT = "E:\\lornd\\research\\workspace"
-OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "logs" / "harness" / "dsh"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DS_HOME = str(PROJECT_ROOT / "config" / "dsh")
+WORKSPACE_ROOT = str(PROJECT_ROOT / "workspace")
+OUTPUT_ROOT = PROJECT_ROOT / "logs" / "harness" / "dsh"
 
 def run_task(task, exposed_skills: list[str] | None = None, *, tools=None, cost_tracking: bool = True):
+    Path(WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
     output_dir = create_run_directory(OUTPUT_ROOT)
     print("运行目录：", output_dir)
     result = asyncio.run(run_agent(
