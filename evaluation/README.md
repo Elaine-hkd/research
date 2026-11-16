@@ -64,6 +64,71 @@ Python 技能仍使用 `python_executable`（默认任务 PATH 中的 `python3`�
 为 cancelled 并尝试清理；输出目录中的已有结果保留。正常退出码为 0，流程错误为 1，
 Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程错误。
 
+## 发邮件示例实验
+
+这个示例把独立入口里的发邮件任务接成一个完整实验：读取任务 → 准备本地环境 →
+运行 OpenHands → 根据 RPA 结果评分 → 保存实验结果和 trace。默认只有 `with-skill` 条件，
+一个任务、重复一次，运行时会向 `lornd@qq.com` 真实发送一封自我介绍邮件。
+
+前置条件是现有 Python 3.12+ 虚拟环境及项目依赖已准备好，注册中心已启动并注册
+`rpa-email`，RPA 邮件服务可达。根目录 `.env` 需填写 `DEEPSEEK_API_KEY`；
+默认启用费用统计，还需要 `RESEARCH_PROJECT_ID` 和 `RESEARCH_USER_ID`。
+可以在邮件专用 agent 配置中将 `cost_tracking` 改为 `false`，关闭费用入账。
+
+在 `D:\Projects\research` 的 PowerShell 中先预览：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evaluation `
+  --dataset config\datasets\email-demo.toml `
+  --environment config\environments\email-demo.toml `
+  --agent config\agents\openhands-email.toml `
+  --evaluation config\evaluation\email-demo.toml `
+  --name "email-trace-demo" --plan
+```
+
+预期显示任务 `send-introduction-email`、`planned_trials: 1` 和完整实验目录。
+预览只读取本地配置和任务，不调用模型、注册中心或 RPA 服务。移除 `--plan` 后实际运行，
+会调用付费模型并发送真实邮件；无需 Docker、Bash 或本机邮件客户端。
+这里的技能脚本下载到本机，由当前 Python 执行，再向原有 RPA 服务下发邮件任务；
+与独立入口通过注册中心服务端执行脚本的位置不同。
+
+查看生成的实验：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m agent_session_analyzer --root D:\Projects\research\logs\exp
+```
+
+浏览器打开 `http://127.0.0.1:8765`，选择 `email-trace-demo` 和任务，再打开 trace。
+查看器只读取已有结果，不重新发送邮件。默认实验目录为
+`logs/exp/email_demo/openhands/deepseek-deepseek-flash/email-trace-demo/`，主要产物包括：
+
+- `manifest.json`、`results.jsonl`、`summary.json`：实验计划、试验结果和汇总。
+- `trials/send-introduction-email__with-skill__001/agent/trace/`：标准 trace。
+- 同一 trial 的 `agent/tool-calls.jsonl`：实际资源参数、脚本输出及退出状态。
+- 同一 trial 的 `verifier/result.json`：评分依据、RPA 任务 ID 和结构化状态。
+- 开启费用统计时，同一 trial 的 `agent/usage.jsonl`：逐次费用明细。
+
+评分不调用模型，也不采用最终回答中的“发送成功”作为证据。
+`reward=1` 要求本次试验只进行一次发送调用，收件人和主题与任务一致，正文非空，
+没有抄送或附件，且脚本返回 `success=true`、`status=SUCCESS`、`execution_status=SUCCESS`。
+若第一次等待未到终态，允许通过 `--task-id` 查询同一个任务；成功结果必须关联本次发送的任务 ID。
+其余完成运行但未取得成功证据的情况记为 0，并保留具体结果；环境、记录或评分异常按原流程保存为错误。
+这个分数表示 RPA 服务报告发送成功，不核验收件箱，也不评价正文质量。
+
+任务和配置分别从以下位置修改：
+
+| 内容 | 文件 |
+| --- | --- |
+| 收件人、主题、任务指令和总时限 | `data/task/email-demo.toml` |
+| 任务加载、准备、本地环境工厂和评分逻辑 | `datasets/email_demo.py` |
+| 注册中心地址、可用技能、脚本执行预算 | `config/environments/email-demo.toml` |
+| 模型、工具、费用开关和 agent 预算 | `config/agents/openhands-email.toml` |
+| 条件、重复次数和输出根目录 | `config/evaluation/email-demo.toml` |
+
+增大 `repeats` 或更换实验名会再次发信。`--resume` 会跳过已有合法评分的完成项，
+但对可重跑的失败项会从头执行，也可能再次发送；结果未知时先根据日志里的 RPA 任务 ID 核对状态。
+本次仅做静态复核，未执行测试，由用户自行验证。
+
 ## 修改实验
 
 实验直接由命令行组合，不再读取总实验文件或 `[configs]` 引用。

@@ -37,6 +37,9 @@ dsh 通过每个 trial 的桥接接口将注册中心资源执行、终端和文
 环境与技能执行接口见 [environment/README.md](environment/README.md)。
 统一实验格式、组件边界、结果语义和恢复规则见 [Agent 实验原则](EXPERIMENT_PRINCIPLES.md)。
 
+想先查看一个完整实验的 trace，可以运行 [发邮件示例实验](evaluation/README.md#发邮件示例实验)。
+它通过现有 `rpa-email` 技能真实发信，默认一个任务、运行一次，使用本地环境，无需 Docker。
+
 如果项目需要直接调用模型并记录费用，可以单独安装 `research-llm`。调用、单价配置和明细导出见 [大模型调用和项目用量](llm/README.md)。
 OpenHands、dsh 在 `[agent]` 下用 `cost_tracking = true/false` 控制费用统计，默认配置已开启。
 运行前请设置 `RESEARCH_PROJECT_ID`、`RESEARCH_USER_ID`，也可以写入项目根目录的 `.env`。

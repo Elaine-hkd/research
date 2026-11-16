@@ -1,0 +1,6 @@
+[environment]
+factory = "datasets.email_demo:create_environment"
+registry_url = "http://127.0.0.1:5000"
+allowed_skills = ["rpa-email"]
+registry_timeout = 30
+default_timeout = 360
