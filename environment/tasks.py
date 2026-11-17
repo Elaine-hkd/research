@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import shutil
 
+from datasets.package import read_package_index, resource_path
+
 from .runtime import (CONTAINER_RUNTIME_PROBE, WORKER_PYTHON_EXECUTABLE,
                       WORKER_RUNTIME_DIRECTORY, WORKER_RUNTIME_IMAGE,
                       worker_runtime_build_command)
@@ -186,13 +188,13 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
     """将任务数据复制到新的持久准备目录，不修改原始数据。
 
     准备目录由调用方管理；此处不启动环境。
-    保留索引中的绝对路径，相对路径以索引所在目录为基准解析。
+    索引必须来自标准资源包，所有资源路径相对包根目录解析。
     仅在副本 task.md 中将 environment 改名为 sandbox，以适配 BenchFlow 0.7.8。
     副本中的 Dockerfile* 将 pip 和官方 Ubuntu/Debian APT 源切换为清华镜像。
     主 Dockerfile 通过独立构建阶段复制框架 Python，不安装或升级任务系统包。
     """
-    index_path = Path(index_path).resolve(strict=True)
-    rows = json.loads(index_path.read_text(encoding="utf-8-sig"))["tasks"]
+    package = read_package_index(index_path, task_format="research-skillsbench-v1")
+    rows = package.index["tasks"]
     matches = [row for row in rows if row["id"] == task_id]
     if len(matches) != 1:
         raise ValueError(f"应有一个名称为 {task_id!r} 的任务，实际找到 {len(matches)}")
@@ -211,11 +213,9 @@ def materialize_skillsbench_task(index_path: str | Path, task_id: str,
         if name.casefold() in names or name in {"", ".", ".."}:
             raise ValueError(f"准备路径冲突：{name}")
         names.add(name.casefold())
-        source = Path(path)
-        source = source if source.is_absolute() else index_path.parent / source
-        if source.is_symlink() or source.is_junction():
-            raise ValueError(f"不支持链接形式的任务资源：{source}")
-        source = source.resolve(strict=True)
+        source = resource_path(package.root, path)
+        if name in {"environment", "verifier", "oracle"} and not source.is_dir():
+            raise ValueError(f"任务资源必须为目录：{source}")
         if source == destination or source in destination.parents or destination in source.parents:
             raise ValueError("准备目录与任务源目录重叠")
         if source.is_dir():

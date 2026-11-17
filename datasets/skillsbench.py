@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import json
 import math
 from pathlib import Path, PurePosixPath
 import re
@@ -10,6 +9,7 @@ import shutil
 
 import yaml
 
+from datasets.package import read_package_index, resource_path
 from evaluation.contracts import AgentResult, PreparedTask, Score, Task, TrialContext
 
 
@@ -76,29 +76,15 @@ def _document(path: Path) -> tuple[dict, str]:
 
 
 def _source(index: Path, value: str) -> Path:
-    path = Path(value)
-    path = path if path.is_absolute() else index.parent / path
-    if path.is_symlink() or path.is_junction():
-        raise ValueError(f"不支持链接形式的数据集资源：{path}")
-    return path.resolve(strict=True)
+    return resource_path(index.parent, value)
 
 
 def load_tasks(index: Path, task_ids: list[str] | None = None) -> list[Task]:
     """按索引顺序或显式指定的顺序返回任务。"""
-    index = Path(index).resolve(strict=True)
-    raw = index.read_bytes()
-    document = json.loads(raw.decode("utf-8-sig"))
-    if document.get("schema_version") != 1 or not isinstance(document.get("tasks"), list):
-        raise ValueError("需要包含 tasks 且 schema_version=1 的 SkillsBench 索引")
-    rows = document["tasks"]
-    by_id = {}
-    for row in rows:
-        task_id = row["id"]
-        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id):
-            raise ValueError(f"不支持的任务 ID：{task_id!r}")
-        if task_id in by_id:
-            raise ValueError(f"重复的任务 ID：{task_id}")
-        by_id[task_id] = row
+    package = read_package_index(index, task_format="research-skillsbench-v1")
+    index = package.index_path
+    document = package.index
+    by_id = {row["id"]: row for row in document["tasks"]}
     selected = list(by_id) if task_ids is None else task_ids
     if not selected or len(set(selected)) != len(selected):
         raise ValueError("任务选择不能为空，也不能包含重复项")
@@ -113,9 +99,8 @@ def load_tasks(index: Path, task_ids: list[str] | None = None) -> list[Task]:
         if not instruction:
             raise ValueError(f"任务指令为空：{task_file}")
         for key in ("environment_dir", "verifiler_dir", "oracle_dir", "skills_dir"):
-            directory = _source(index, row[key])
-            if not directory.is_dir():
-                raise ValueError(f"{key} 必须为目录：{directory}")
+            # 预览和抽样只需要小型任务文件；选定任务的素材在准备阶段检查。
+            resource_path(package.root, row[key], must_exist=False)
         timeout = metadata.get("agent", {}).get("timeout_sec", 900)
         if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError(f"智能体超时设置无效，文件：{task_file}")
@@ -123,7 +108,8 @@ def load_tasks(index: Path, task_ids: list[str] | None = None) -> list[Task]:
             id=task_id, instruction=instruction, metadata=metadata,
             agent_timeout_sec=timeout,
             source={"index": str(index), "row": row,
-                    "index_sha256": hashlib.sha256(raw).hexdigest(),
+                    "index_sha256": package.index_sha256,
+                    "dataset_sha256": package.dataset_sha256,
                     "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest()},
         ))
     return tasks
@@ -166,8 +152,10 @@ def prepare_task(task: Task, destination: Path, condition: str) -> PreparedTask:
     from environment import materialize_skillsbench_task
 
     index = Path(task.source["index"])
-    if hashlib.sha256(index.read_bytes()).hexdigest() != task.source["index_sha256"]:
-        raise ValueError("实验计划生成后，数据集索引发生了变化")
+    package = read_package_index(index, task_format="research-skillsbench-v1")
+    if (package.index_sha256 != task.source["index_sha256"]
+            or package.dataset_sha256 != task.source["dataset_sha256"]):
+        raise ValueError("实验计划生成后，数据集描述或索引发生了变化")
     task_file = _source(index, task.source["row"]["task_file"])
     if hashlib.sha256(task_file.read_bytes()).hexdigest() != task.source["task_sha256"]:
         raise ValueError(f"计划生成后，任务指令发生了变化：{task.id}")
@@ -181,6 +169,8 @@ def prepare_task(task: Task, destination: Path, condition: str) -> PreparedTask:
     if condition != "with-skill":
         raise ValueError(f"不支持的实验条件：{condition}")
     source = _source(index, task.source["row"]["skills_dir"])
+    if not source.is_dir():
+        raise ValueError(f"skills_dir 必须为目录：{source}")
     for path in source.rglob("*"):
         if path.is_symlink() or path.is_junction():
             raise ValueError(f"不支持链接形式的技能资源：{path}")

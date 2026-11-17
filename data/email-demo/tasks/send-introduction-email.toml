@@ -1,0 +1,16 @@
+[task]
+id = "send-introduction-email"
+receiver = "lornd@qq.com"
+subject = "Agent 实验：自我介绍"
+timeout_sec = 900
+instruction = """
+请使用 rpa-email 技能，向下面指定的收件人真实发送一封自我介绍邮件。
+邮件主题使用给定值，正文由你撰写，用中文 3–5 句介绍自己的身份、能力和本次实验目的。
+不添加抄送和附件。你已获得本次发信授权，无需再次确认。
+
+先通过 search_skills 查找 rpa-email，再用 load_skill 阅读技能说明。
+使用 execute_resource 调用该技能的 scripts/rpa_email.py，收件人、主题、正文分别作为独立参数传入。
+本次调用使用 --wait 30、--timeout 300，正常发送时不要使用 --dry-run。
+一次试验只下发一次发送任务。若取得 task_id 但结果未知，只使用 --task-id 查询原任务，
+不能重新下发；遇到失败应说明原因。最后根据工具返回的结构化结果报告状态和任务 ID。
+"""

@@ -1,5 +1,5 @@
 [dataset]
-index = "../../data/task/email-demo.toml"
+package = "../../data/email-demo"
 loader = "datasets.email_demo:load_tasks"
 prepare = "datasets.email_demo:prepare_task"
 setup = "datasets.email_demo:setup_environment"

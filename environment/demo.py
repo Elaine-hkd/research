@@ -12,7 +12,7 @@ async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--task", type=Path, help="原生任务包目录")
-    source.add_argument("--index", type=Path, help="research 的 skillsbench.json 索引")
+    source.add_argument("--index", type=Path, help="SkillsBench 标准资源包的 index.json")
     parser.add_argument("--task-id")
     args = parser.parse_args()
     output = Path("workspace/environment") / uuid4().hex

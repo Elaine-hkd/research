@@ -1,6 +1,6 @@
 [dataset]
 # 路径相对此文件，不相对实验入口或执行目录。
-index = "../../data/task/skillsbench.json"
+package = "../../data/skillsbench"
 
 # 不设置 task_ids 时，使用完整索引作为候选任务池。
 # task_ids = ["3d-scan-calc"]

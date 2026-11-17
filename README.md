@@ -155,9 +155,31 @@ uv run python -X utf8 -c "from harness.dsh.main import run_task; result = run_ta
 | `--agent` | `config/agents/` | 模型、harness、工具、记录器和运行预算 |
 | `--evaluation` | `config/evaluation/` | 条件、重复次数、通过阈值、评分函数和输出根目录 |
 
-配置中的 `dataset.index` 和 `output_dir` 相对于所在 TOML 文件解析。SkillsBench 索引内的资源路径则相对于索引文件解析，已经改为仓库内的相对路径，移动项目目录后无需替换盘符。
+配置中的 `dataset.package` 和 `output_dir` 相对于所在 TOML 文件解析。每个资源包根目录必须包含 `dataset.json` 和 `index.json`，索引内的资源路径相对包根目录解析。移动整个包后，只需修改 `dataset.package`。
 
-索引中的 `source_task_dir` 保留原始数据来源，只用于溯源，不参与本地资源读取。实验会记录索引哈希；索引内容改变后，旧实验的待重跑任务会触发校验，请使用新实验名重新生成计划，历史结果和 trace 可以继续查看。
+项目目前支持 SkillsBench 和 email-demo 两个独立资源包，默认路径分别为 `data/skillsbench/` 和 `data/email-demo/`。包描述记录数据集 ID、资源版本和任务格式；实验快照保存描述与索引哈希。索引中的 `source_task_dir` 记录上游相对位置，只用于溯源。资源包格式和迁移说明见 [数据集资源包](datasets/README.md)，接入新数据集请看 [资源包转换指南：以 email-demo 为例](datasets/CONVERTING_DATASETS.md)。本次迁移改变了配置和索引，请使用新实验名；历史结果和 trace 可以继续查看。
+
+### 下载并解压资源包
+
+**运行 SkillsBench 前，请单独下载框架适配后的 SkillsBench 资源包，并解压到项目根目录的 `data/` 文件夹下。** 克隆代码仓库后仍需准备这份资源；仅运行 email-demo 时无需下载 SkillsBench。
+
+解压后的目录应为：
+
+```text
+research/
+└── data/
+    └── skillsbench/
+        ├── dataset.json
+        ├── index.json
+        ├── tasks/
+        ├── skills/
+        ├── environment/
+        ├── verifier/
+        ├── oracle/
+        └── assets/
+```
+
+请确认两个 JSON 文件直接位于 `data/skillsbench/` 下，避免解压后多出一层 `skillsbench/skillsbench/`。只有压缩包、尚未解压时，框架无法读取其中资源。准备好目录后，再启动注册中心或预览实验；其他资源包也按 `data/<数据集名称>/` 的层级放置，已有完整目录时无需重复下载。
 
 ### 启动 skill 注册中心
 
@@ -165,17 +187,17 @@ uv run python -X utf8 -c "from harness.dsh.main import run_task; result = run_ta
 
 ```powershell
 Set-Location D:\Projects\research
-$env:SKILLS_DIR = (Resolve-Path .\.skills).Path
+$env:SKILLS_DIR = (Resolve-Path .\data\skillsbench\skills).Path
 uv run --project ..\skill_registry skill-registry
 ```
 
-这会为相邻 `skill_registry` 项目准备其独立环境，并扫描当前仓库的 `.skills`。启动后可打开 `http://127.0.0.1:5000/docs` 查看接口。请保持该终端运行；使用已有服务时，无需再启动，只需在 environment TOML 中填写实际地址。
+这会为相邻 `skill_registry` 项目准备其独立环境，并扫描 SkillsBench 包的 `skills/`。运行邮件示例时，将该路径改成 `.\data\email-demo\skills`，再启动注册中心。切换数据集后需要重新启动服务以切换扫描目录，或使用独立服务并在 environment TOML 中填写对应地址。启动后可打开 `http://127.0.0.1:5000/docs` 查看接口。
 
 默认 SkillsBench 环境使用 `registry_url = "http://127.0.0.1:5000"`。框架从宿主访问该地址，技能资源下载后在本次 trial 的容器中执行。每个任务只允许访问其技能清单；注册中心必须已有这些技能，并与数据集中的正文、资源保持一致。环境设置阶段会检查技能，但不会自动向远端服务注册技能。
 
 ### SkillsBench：先选一个任务
 
-原始数据位于 `data/`，索引为 `data/task/skillsbench.json`，技能位于 `.skills/skillsbench/`。默认配置在排除忽略项后抽取 10 个任务，只运行 `with-skill`，每个任务重复 3 次，共 30 个 trial。
+请先按上文下载并解压 SkillsBench 资源包，确认 `data/skillsbench/` 下包含索引、题目、技能、环境素材、评分器和参考解。默认配置在排除忽略项后抽取 10 个任务，只运行 `with-skill`，每个任务重复 3 次，共 30 个 trial。
 
 第一次运行建议复制配置，缩小到一个任务、一次重复：
 
@@ -188,7 +210,7 @@ Copy-Item .\config\evaluation\skillsbench.toml .\config\evaluation\skillsbench-d
 
 ```toml
 [dataset]
-index = "../../data/task/skillsbench.json"
+package = "../../data/skillsbench"
 task_ids = ["3d-scan-calc"]
 sample_size = 1
 seed = 42
@@ -215,7 +237,7 @@ SkillsBench 使用独立的 Linux Docker 任务环境，构建镜像和 verifier
 
 ### 本地邮件示例
 
-如果希望先看一个无需 Docker 的完整实验，可以使用已有的 `email-demo` 配置。任务在 `data/task/email-demo.toml`，智能体在 `config/agents/openhands-email.toml`，环境在 `config/environments/email-demo.toml`，评估配置在 `config/evaluation/email-demo.toml`。
+如果希望先看一个无需 Docker 的完整实验，可以使用已有的 `email-demo` 配置。资源包位于 `data/email-demo/`，任务在 `tasks/send-introduction-email.toml`，智能体在 `config/agents/openhands-email.toml`，环境在 `config/environments/email-demo.toml`，评估配置在 `config/evaluation/email-demo.toml`。注册中心应扫描该包的 `skills/`。
 
 这个实验使用现有 `rpa-email` 技能，运行时会真实发信。请先核对任务里的收件人、主题和指令，并确保注册中心的 `rpa-email` 和对应 RPA 邮件服务可用。评分读取工具返回的发送状态，不调用额外模型，也不核验收件箱是否收到。完整说明见 [发邮件示例实验](evaluation/README.md#发邮件示例实验)。
 
@@ -323,7 +345,7 @@ uv run python -m research_llm logs/model-usage.sqlite3 research
 | --- | --- |
 | 模型、工具、预算和费用开关 | `config/agents/`；独立入口则修改 `harness/<名称>/main.py` |
 | 任务范围、忽略列表和抽样 | `config/datasets/` |
-| 任务指令和数据资源 | `data/task/` 及其索引引用的资源目录 |
+| 任务指令、技能和数据资源 | `data/<数据集>/` 资源包及其 `index.json` |
 | 环境类型、注册中心地址和环境预算 | `config/environments/` |
 | 条件、重复次数、评分函数和输出位置 | `config/evaluation/` |
 | 新数据集的加载、准备、设置和评分 | `datasets/`，接口类型见 `evaluation/contracts.py` |

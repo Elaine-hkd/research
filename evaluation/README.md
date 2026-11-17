@@ -8,6 +8,7 @@
 | --- | --- |
 | `evaluation/runner.py` | 调度 trial、创建和销毁环境、调用组件、保存结果和汇总 |
 | `evaluation/config.py` | 读取命令行选定的组件 TOML，解析各自路径并校验最终配置 |
+| `datasets/package.py` | 标准资源包识别、公共索引校验和包内路径解析 |
 | `evaluation/dataset.py` | 共用任务加载入口，按数据集配置排除任务并随机采样 |
 | `evaluation/experiment.py` | 恢复原实验计划、判断跳过项、归档忽略项与旧尝试并独占实验目录 |
 | `datasets/skillsbench.py` | 读取和准备 SkillsBench、配置其 Docker 环境、注入技能、调用原生 verifier |
@@ -70,6 +71,8 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 运行 OpenHands → 根据 RPA 结果评分 → 保存实验结果和 trace。默认只有 `with-skill` 条件，
 一个任务、重复一次，运行时会向 `lornd@qq.com` 真实发送一封自我介绍邮件。
 
+资源包位于 `data/email-demo/`，包含两个固定入口、原任务 TOML 和技能。注册中心应扫描该包的 `skills/`。
+
 前置条件是现有 Python 3.12+ 虚拟环境及项目依赖已准备好，注册中心已启动并注册
 `rpa-email`，RPA 邮件服务可达。根目录 `.env` 需填写 `DEEPSEEK_API_KEY`；
 默认启用费用统计，还需要 `RESEARCH_PROJECT_ID` 和 `RESEARCH_USER_ID`。
@@ -119,7 +122,7 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 
 | 内容 | 文件 |
 | --- | --- |
-| 收件人、主题、任务指令和总时限 | `data/task/email-demo.toml` |
+| 收件人、主题、任务指令和总时限 | `data/email-demo/tasks/send-introduction-email.toml` |
 | 任务加载、准备、本地环境工厂和评分逻辑 | `datasets/email_demo.py` |
 | 注册中心地址、可用技能、脚本执行预算 | `config/environments/email-demo.toml` |
 | 模型、工具、费用开关和 agent 预算 | `config/agents/openhands-email.toml` |
@@ -151,7 +154,7 @@ python -m evaluation --dataset config/datasets/skillsbench.toml --environment co
 原 dsh 中的 `pedestrian-traffic-counting`、`dynamic-object-aware-egomotion` 已迁到此处，
 也会用于 OpenHands 和 shell 实验；新实验的候选任务池因此与原来这两个配置有所不同。
 
-`dataset.index`、`output_dir` 相对**定义该字段的 TOML 文件**解析，不受执行目录影响。
+`dataset.package`、`output_dir` 相对**定义该字段的 TOML 文件**解析，不受执行目录影响。资源包的两个固定入口为 `dataset.json`、`index.json`，路径规则及迁移说明见 [数据集资源包](../datasets/README.md)。
 组件文件只允许定义其负责的配置项，不引用其他组件。
 模型和 agent 的其余原生参数仍交给各 harness 解释。
 
@@ -274,7 +277,7 @@ Set-Location E:\lornd\research
 
 ```toml
 [dataset]
-index = "../../data/task/skillsbench.json"
+package = "../../data/skillsbench"
 exclude_task_ids = ["pedestrian-traffic-counting"]
 sample_size = 10
 seed = 42
@@ -364,7 +367,7 @@ dataset.loader → dataset.prepare → environment.factory → environment.start
 当前配置通过 `datasets.skillsbench` 提供数据集相关函数。其 `prepare_task` 复用现有
 `materialize_skillsbench_task`，把分离的索引还原到 trial/task；
 `verifiler_dir` 还原为 `verifier/`，只在副本里把旧 `environment:` 转成 `sandbox:`。
-数据源、oracle 和 verifier 原件不修改。实验保存索引与任务文本的 SHA-256、依赖版本和
+数据源、oracle 和 verifier 原件不修改。实验保存包描述、索引与任务文本的 SHA-256、依赖版本和
 配置快照；环境输入和技能资源保留在各 trial 副本中。运行期间应保持源数据稳定，当前不对
 所有二进制输入做全量内容快照校验。
 

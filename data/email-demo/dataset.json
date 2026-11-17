@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "email-demo",
+  "version": "r1",
+  "task_format": "research-email-demo-v1",
+  "provenance": {
+    "research_commit": "c34d5b50f310b741158683b0c841638e0186662f",
+    "description": "本地 RPA 邮件示例；附带 desktop-hello 技能供环境示例使用。"
+  }
+}

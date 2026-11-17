@@ -54,7 +54,7 @@ from environment import DockerEnvironment, materialize_skillsbench_task
 
 async def main():
     task_dir = materialize_skillsbench_task(
-        "data/task/skillsbench.json", "3d-scan-calc",
+        "data/skillsbench/index.json", "3d-scan-calc",
         Path("workspace/environment") / uuid4().hex / "task",
     )
     async with DockerEnvironment(
@@ -156,7 +156,7 @@ SDK 的中断/关闭顺序、指标提取以及 recorder 的 session/run 关联�
 ```python
 from environment import materialize_skillsbench_task, DockerEnvironment
 task = materialize_skillsbench_task(
-    r"E:\lornd\research\data\task\skillsbench.json", "3d-scan-calc",
+    r"E:\lornd\research\data\skillsbench\index.json", "3d-scan-calc",
     r"E:\lornd\research\workspace\environment\trial-001\task",
 )
 env = DockerEnvironment(task, registry_url="http://127.0.0.1:5000")
@@ -208,7 +208,7 @@ APT 签名校验保持启用。源地址按[清华 Ubuntu](https://mirrors.tuna.
 验证本次缺 Python 的任务（执行目录 `E:\lornd\research`，需现有项目依赖与 Docker）：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 -m environment.demo --index data\task\skillsbench.json --task-id fix-build-google-auto
+.\.venv\Scripts\python.exe -X utf8 -m environment.demo --index data\skillsbench\index.json --task-id fix-build-google-auto
 ```
 
 该命令会创建新副本、构建并启动容器、通过 worker 执行命令、下载文件，然后销毁容器；
@@ -225,7 +225,7 @@ from pathlib import Path
 from uuid import uuid4
 from environment import materialize_skillsbench_task
 task = materialize_skillsbench_task(
-    "data/task/skillsbench.json", "3d-scan-calc",
+    "data/skillsbench/index.json", "3d-scan-calc",
     Path("workspace/environment") / uuid4().hex / "task",
 )
 print(task)
@@ -285,7 +285,7 @@ from environment import DockerEnvironment, configure_task_desktop, materialize_s
 
 async def main():
     task = materialize_skillsbench_task(
-        "data/task/skillsbench.json", "3d-scan-calc",
+        "data/skillsbench/index.json", "3d-scan-calc",
         Path("workspace/environment") / uuid4().hex / "task",
     )
     configure_task_desktop(task, port=6080)
@@ -334,7 +334,7 @@ python test.py
 
 ```powershell
 uv sync --locked
-python -m environment.demo --index data\task\skillsbench.json --task-id 3d-scan-calc
+python -m environment.demo --index data\skillsbench\index.json --task-id 3d-scan-calc
 ```
 
 预期 workspace/environment/<唯一目录>/hello.txt 内容为 hello，随后回收容器。需要镜像构建所需的网络。

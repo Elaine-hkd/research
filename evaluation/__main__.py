@@ -58,6 +58,8 @@ def main() -> int:
             "agent_recorder": config["agent"].get("recorder"),
             "tools": config["agent"].get("tools"),
             "dataset_loader": dataset["loader"], "dataset_prepare": dataset["prepare"],
+            "dataset_package": dataset["package"],
+            "dataset_identity": dataset["package_identity"],
             "dataset_setup": dataset.get("setup"),
             "environment_factory": config["environment"]["factory"],
         }, ensure_ascii=False, indent=2))

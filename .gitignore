@@ -17,6 +17,9 @@ node_modules/
 
 config/dsh/sessions/
 
-logs/
+/logs/
 
-workspace/
+/workspace/
+
+/data/*
+!/data/email-demo/

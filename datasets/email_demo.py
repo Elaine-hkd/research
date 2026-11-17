@@ -7,8 +7,10 @@ import json
 import math
 from pathlib import Path
 import re
+import shutil
 import tomllib
 
+from datasets.package import read_package_index, resource_path
 from evaluation.contracts import AgentResult, PreparedTask, Score, Task, TrialContext
 from utils.json_io import write_json
 
@@ -18,13 +20,20 @@ EMAIL_RESOURCE = "scripts/rpa_email.py"
 
 
 def load_tasks(index: Path, task_ids: list[str] | None = None) -> list[Task]:
-    """从 TOML 读取一个发信任务，返回供计划和实际运行共用的任务列表。"""
-    index = Path(index).resolve(strict=True)
-    raw = index.read_bytes()
+    """从邮件资源包读取一个发信任务，保留原有指令和评分参数。"""
+    package = read_package_index(index, task_format="research-email-demo-v1")
+    if len(package.index["tasks"]) != 1:
+        raise ValueError("邮件示例资源包必须包含一个任务")
+    row = package.index["tasks"][0]
+    task_file = resource_path(package.root, row["task_file"])
+    resource_path(package.root, row["skills_dir"], must_exist=False)
+    raw = task_file.read_bytes()
     task = tomllib.loads(raw.decode("utf-8-sig"))["task"]
     task_id = task["id"]
     if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", task_id):
         raise ValueError("邮件任务 id 必须为可用于路径的非空标识")
+    if task_id != row["id"]:
+        raise ValueError("邮件任务文件与索引中的 ID 不一致")
     if task_ids is not None and task_ids != [task_id]:
         raise ValueError(f"邮件示例仅包含任务 {task_id!r}")
     for key in ("receiver", "subject", "instruction"):
@@ -40,20 +49,39 @@ def load_tasks(index: Path, task_ids: list[str] | None = None) -> list[Task]:
     return [Task(
         id=task_id, instruction=instruction, agent_timeout_sec=timeout,
         metadata={key: task[key] for key in ("receiver", "subject")},
-        source={"index": str(index), "index_sha256": hashlib.sha256(raw).hexdigest()},
+        source={"index": str(package.index_path), "row": row,
+                "dataset_sha256": package.dataset_sha256,
+                "index_sha256": package.index_sha256,
+                "task_sha256": hashlib.sha256(raw).hexdigest()},
     )]
 
 
 def prepare_task(task: Task, destination: Path, condition: str) -> PreparedTask:
-    """保存实际任务副本，技能由当前 trial 的注册中心客户端提供。"""
+    """保存任务和技能副本；执行仍通过当前 trial 的注册中心客户端。"""
     if condition != "with-skill":
         raise ValueError("邮件示例只支持 with-skill 条件")
-    raw = Path(task.source["index"]).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != task.source["index_sha256"]:
+    package = read_package_index(task.source["index"], task_format="research-email-demo-v1")
+    if (package.index_sha256 != task.source["index_sha256"]
+            or package.dataset_sha256 != task.source["dataset_sha256"]):
+        raise ValueError("实验计划生成后，邮件数据集描述或索引发生了变化")
+    row = task.source["row"]
+    raw = resource_path(package.root, row["task_file"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != task.source["task_sha256"]:
         raise ValueError("实验计划生成后，邮件任务文件发生了变化")
+    source = resource_path(package.root, row["skills_dir"])
+    if not source.is_dir():
+        raise ValueError(f"邮件技能资源必须为目录：{source}")
+    for path in source.rglob("*"):
+        if path.is_symlink() or path.is_junction():
+            raise ValueError(f"不支持链接形式的技能资源：{path}")
+    for relative in ("SKILL.md", EMAIL_RESOURCE):
+        if not resource_path(source, relative).is_file():
+            raise ValueError(f"邮件技能缺少文件：{relative}")
     destination.mkdir(parents=True)
     (destination / "task.toml").write_bytes(raw)
-    return PreparedTask(task_dir=destination)
+    skills_dir = destination.parent / "skills"
+    shutil.copytree(source, skills_dir / "rpa_email")
+    return PreparedTask(task_dir=destination, skills_dir=skills_dir)
 
 
 def create_environment(task_dir: Path, *, output_dir: Path, **options):

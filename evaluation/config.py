@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import tomllib
 
+from datasets.package import read_package
 from tools.loader import validate_tools
 from harness.runner import load_function
 
@@ -25,14 +26,14 @@ def _read_toml(path: Path) -> dict:
     path_fields = [(config, "output_dir")]
     dataset = config.get("dataset")
     if isinstance(dataset, dict):
-        path_fields.append((dataset, "index"))
+        path_fields.append((dataset, "package"))
     for section, key in path_fields:
         if key not in section:
             continue
         value = section[key]
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{path} 中的 {key} 必须为非空路径字符串")
-        # 完整配置校验时再检查索引是否存在。
+        # 完整配置校验时再读取资源包。
         section[key] = str((path.parent / value).resolve())
     return config
 
@@ -106,9 +107,15 @@ def load_config(*, dataset: Path, environment: Path, agent: Path,
     if isinstance(threshold, bool) or not isinstance(threshold, (float, int)) or not 0 <= threshold <= 1:
         raise ValueError("pass_threshold 必须在 [0, 1] 范围内")
     dataset = config["dataset"]
-    if extra := dataset.keys() - {"index", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
+    if extra := dataset.keys() - {"package", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
         raise ValueError(f"未知数据集配置项：{sorted(extra)}")
-    dataset["index"] = str(Path(dataset["index"]).resolve(strict=True))
+    package_path = dataset.get("package")
+    if not isinstance(package_path, str) or not package_path.strip():
+        raise ValueError("dataset.package 必须指定标准资源包目录")
+    package = read_package(package_path)
+    dataset["package"] = str(package.root)
+    dataset["index"] = str(package.index_path)
+    dataset["package_identity"] = package.identity()
     if "task_ids" in dataset and (not isinstance(dataset["task_ids"], list)
                                 or not all(isinstance(item, str) for item in dataset["task_ids"])):
         raise ValueError("dataset.task_ids 必须为任务 ID 列表")
