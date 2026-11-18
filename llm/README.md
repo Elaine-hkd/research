@@ -24,7 +24,7 @@ configure(
 response = completion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_key=os.environ["THINGO_UNI_API_KEY"],
     api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
 )
@@ -44,7 +44,7 @@ from research_llm import acompletion
 response = await acompletion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_key=os.environ["THINGO_UNI_API_KEY"],
     api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
 )
@@ -56,7 +56,7 @@ response = await acompletion(
 with completion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_key=os.environ["THINGO_UNI_API_KEY"],
     api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
     stream=True,
@@ -140,7 +140,7 @@ accounting = UsageRecorder(
 )
 summary = import_traces(
     accounting, ["原 agent/trace/文件.jsonl"],
-    model="deepseek/deepseek-flash", api_key_env="DASHSCOPE_API_KEY",
+    model="deepseek/deepseek-flash", api_key_env="THINGO_UNI_API_KEY",
     log_path="logs/recovered-usage.jsonl",
 )
 ```

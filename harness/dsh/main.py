@@ -14,6 +14,14 @@ DS_HOME = str(PROJECT_ROOT / "config" / "dsh")
 WORKSPACE_ROOT = str(PROJECT_ROOT / "workspace")
 OUTPUT_ROOT = PROJECT_ROOT / "logs" / "harness" / "dsh"
 
+MODEL={
+    "provider": "deepseek-official",
+    "model": "qwen3.8-max-0902",
+    "base_url": "https://uniapi.thingo.com.cn/v1",
+    "api_key_env": "THINGO_UNI_API_KEY",
+    "max_tokens": 8192,
+}
+
 def run_task(task, exposed_skills: list[str] | None = None, *, tools=None, cost_tracking: bool = True):
     Path(WORKSPACE_ROOT).mkdir(parents=True, exist_ok=True)
     output_dir = create_run_directory(OUTPUT_ROOT)
@@ -22,8 +30,7 @@ def run_task(task, exposed_skills: list[str] | None = None, *, tools=None, cost_
         runner="harness.dsh.runner:execute",
         recorder="agent_session_analyzer:DshRecorder",
         instruction=task,
-        model={"provider": "deepseek-official", "model": "deepseek-v4-flash",
-               "api_key_env": "DEEPSEEK_API_KEY"},
+        model=MODEL,
         settings={"dsh_home": DS_HOME, "profile": "sdk-minimal", "env": {
             "EXPOSED_SKILLS": json.dumps(exposed_skills or [], ensure_ascii=False),
         }, "cost_tracking": cost_tracking},

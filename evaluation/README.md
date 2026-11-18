@@ -39,7 +39,7 @@ Set-Location E:\lornd\research
 实际评估需要现有依赖、Docker CLI、Compose v2、运行中的 Linux Docker 引擎，
 以及任务构建、verifier 安装依赖所需的网络。任务镜像须提供 Bash；当前 OpenHands runner
 使用支持工具调用的文本模型。宿主读取项目 `.env`（已有环境变量优先），从配置中的
-`model.api_key_env` 获取模型密钥，默认是 `DEEPSEEK_API_KEY`。
+`model.api_key_env` 获取模型密钥。仓库提供的 Thingo 国内站配置读取 `THINGO_UNI_API_KEY`。
 
 默认工具包含四个注册中心工具以及 terminal/read_file/write_file，详见 agent 组件配置。
 评测通过 `[environment].registry_url` 设置注册中心地址，默认 `http://127.0.0.1:5000`；
@@ -74,7 +74,7 @@ Ctrl+C 为 130。任务得分为 0 是有效评估结果，不因此返回流程
 资源包位于 `data/email-demo/`，包含两个固定入口、原任务 TOML 和技能。注册中心应扫描该包的 `skills/`。
 
 前置条件是现有 Python 3.12+ 虚拟环境及项目依赖已准备好，注册中心已启动并注册
-`rpa-email`，RPA 邮件服务可达。根目录 `.env` 需填写 `DEEPSEEK_API_KEY`；
+`rpa-email`，RPA 邮件服务可达。根目录 `.env` 需填写 `THINGO_UNI_API_KEY`；
 默认启用费用统计，还需要 `RESEARCH_PROJECT_ID` 和 `RESEARCH_USER_ID`。
 可以在邮件专用 agent 配置中将 `cost_tracking` 改为 `false`，关闭费用入账。
 

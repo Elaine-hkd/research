@@ -64,7 +64,8 @@ pnpm --dir .\config\dsh\profiles\sdk-minimal install --no-frozen-lockfile
 在项目根目录创建或补充 `.env`，将示例值替换成自己的配置：
 
 ```dotenv
-DEEPSEEK_API_KEY=你的模型密钥
+THINGO_UNI_API_KEY=你的 Thingo 国内站密钥
+THINGO_INTL_API_KEY=
 RESEARCH_PROJECT_ID=research
 RESEARCH_USER_ID=姓名或学号
 SKILL_REGISTRY_URL=http://127.0.0.1:5000
@@ -74,7 +75,8 @@ SKILL_REGISTRY_URL=http://127.0.0.1:5000
 
 | 配置 | 用途 |
 | --- | --- |
-| `DEEPSEEK_API_KEY` | 默认模型凭据；由 agent 配置中的 `api_key_env` 指定读取哪个环境变量 |
+| `THINGO_UNI_API_KEY` | Thingo 国内站凭据，配合 `https://uniapi.thingo.com.cn/v1` 使用 |
+| `THINGO_INTL_API_KEY` | Thingo 国际站凭据，配合 `https://intlapi.thingo.com.cn/v1` 使用，使用国际站时填写 |
 | `RESEARCH_PROJECT_ID` | 费用归属的项目编号，同一项目的同学使用相同值 |
 | `RESEARCH_USER_ID` | 费用归属的使用人，请填写能识别本人的姓名或学号 |
 | `SKILL_REGISTRY_URL` | 独立 harness 入口使用的注册中心地址；实验使用 environment TOML 中的 `registry_url` |
@@ -99,8 +101,8 @@ SKILL_REGISTRY_URL=http://127.0.0.1:5000
 ```toml
 [model]
 model = "deepseek/deepseek-flash"
-base_url = "https://api.deepseek.com"
-api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://uniapi.thingo.com.cn/v1"
+api_key_env = "THINGO_UNI_API_KEY"
 timeout = 120
 num_retries = 0
 

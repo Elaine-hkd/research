@@ -1,8 +1,8 @@
 # Shell 实验使用独立的 Agent 配置，通过 --agent 选择。
 [model]
 model = "deepseek/deepseek-flash"
-base_url = "https://api.deepseek.com"
-api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://uniapi.thingo.com.cn/v1"
+api_key_env = "THINGO_UNI_API_KEY"
 timeout = 120
 num_retries = 0
 

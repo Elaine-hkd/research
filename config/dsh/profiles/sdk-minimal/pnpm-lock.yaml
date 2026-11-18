@@ -1,7 +1,7 @@
-lockfileVersion: '6.0'
+lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 importers:
@@ -14,7 +14,9 @@ importers:
 
 packages:
 
-  file:../../../../tools/dsh:
+  dsh-research-tools@file:../../../../tools/dsh:
     resolution: {directory: ../../../../tools/dsh, type: directory}
-    name: dsh-research-tools
-    dev: false
+
+snapshots:
+
+  dsh-research-tools@file:../../../../tools/dsh: {}

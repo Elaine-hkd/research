@@ -47,10 +47,12 @@ def save_usage(accounting: UsageRecorder, recorder, *, model: dict, metadata: di
     paths = list(getattr(recorder, "paths", {}).values())
     if getattr(recorder, "last_path", None) is not None:
         paths.append(recorder.last_path)
+    extra_body = model.get("litellm_extra_body")
+    service_tier = extra_body.get("service_tier") if isinstance(extra_body, dict) else None
     summary = import_traces(
         accounting, paths, model=model["model"], api_key_env=model.get("api_key_env", ""),
         base_url=model.get("base_url"), metadata=metadata, log_path=output_dir / "usage.jsonl",
-        start_offsets=start_offsets,
+        start_offsets=start_offsets, service_tier=service_tier,
     )
     if result is not None:
         result.usage["accounting"] = summary
