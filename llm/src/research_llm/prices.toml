@@ -1,19 +1,690 @@
-# 团队配置的每百万 token 单价；省略缓存单价时，缓存按普通输入计价。
-[models.deepseek-flash]
-currency = "CNY"
-input = "2"
-output = "8"
-cache_read = "0.04"
-aliases = ["deepseek-v4-flash", "deepseek/deepseek-flash", "deepseek/deepseek-v4-flash"]
+# 2026-11-18 同步 Thingo 公开价目。金额为人民币 / 百万 token，已乘分组倍率和 0.8。
+# tiers 从上到下匹配，表头单价用于其余请求。省略普通缓存单价时按输入价计费。
 
-[models.deepseek-flash.off_peak]
-# 每天按北京时间判断峰段，结束边界不包含在峰段中。
+# uniapi.thingo.com.cn/api/pricing · 国内全模型-标准-文本 · 分组倍率 1
+
+[models."deepseek-flash"]
+currency = "CNY"
+input = "1.6"
+output = "6.4"
+cache_read = "0.032"
+aliases = ["openai/deepseek-flash", "deepseek/deepseek-flash"]
+
+[models."deepseek-flash".off_peak]
 peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
 multiplier = "0.5"
 
-[models."qwen-3.8-max"]
+[models."deepseek-v4-flash"]
 currency = "CNY"
-input = "12"
-output = "36"
-cache_read = "1"
-aliases = ["openai/qwen-3.8-max", "qwen-3.8", "openai/qwen-3.8"]
+input = "1.6"
+output = "6.4"
+cache_read = "0.032"
+aliases = ["openai/deepseek-v4-flash", "deepseek/deepseek-v4-flash"]
+
+[models."deepseek-v4-flash".off_peak]
+peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
+multiplier = "0.5"
+
+[models."deepseek-v4-flash-vision-exp"]
+currency = "CNY"
+input = "1.6"
+output = "6.4"
+cache_read = "0.032"
+aliases = ["openai/deepseek-v4-flash-vision-exp"]
+
+[models."deepseek-v4-flash-vision-exp".off_peak]
+peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
+multiplier = "0.5"
+
+[models."deepseek-v4-pro"]
+currency = "CNY"
+input = "7.2"
+output = "21.6"
+cache_read = "0.24"
+aliases = ["openai/deepseek-v4-pro"]
+
+[models."deepseek-v4-pro".off_peak]
+peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
+multiplier = "0.5"
+
+[models."doubao-seed-2-0-code-preview-260215"]
+currency = "CNY"
+input = "7.68"
+output = "38.4"
+cache_read = "1.536"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-0-code-preview-260215"]
+
+[[models."doubao-seed-2-0-code-preview-260215".tiers]]
+max_input_tokens = 32000
+input = "2.56"
+output = "12.8"
+cache_read = "0.512"
+cache_write_1h = "0.016"
+
+[[models."doubao-seed-2-0-code-preview-260215".tiers]]
+max_input_tokens = 128000
+input = "3.84"
+output = "19.2"
+cache_read = "0.768"
+cache_write_1h = "0.016"
+
+[models."doubao-seed-2-0-lite-260428"]
+currency = "CNY"
+input = "1.44"
+output = "8.64"
+cache_read = "0.288"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-0-lite-260428"]
+
+[[models."doubao-seed-2-0-lite-260428".tiers]]
+max_input_tokens = 32000
+input = "0.48"
+output = "2.88"
+cache_read = "0.096"
+cache_write_1h = "0.016"
+
+[[models."doubao-seed-2-0-lite-260428".tiers]]
+max_output_tokens = 128000
+input = "0.72"
+output = "4.32"
+cache_read = "0.144"
+cache_write_1h = "0.016"
+
+[models."doubao-seed-2-0-mini-260428"]
+currency = "CNY"
+input = "0.64"
+output = "6.4"
+cache_read = "0.128"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-0-mini-260428"]
+
+[[models."doubao-seed-2-0-mini-260428".tiers]]
+max_input_tokens = 32000
+input = "0.16"
+output = "1.6"
+cache_read = "0.032"
+cache_write_1h = "0.016"
+
+[[models."doubao-seed-2-0-mini-260428".tiers]]
+max_input_tokens = 128000
+input = "0.32"
+output = "3.2"
+cache_read = "0.064"
+cache_write_1h = "0.016"
+
+[models."doubao-seed-2-0-pro-260215"]
+currency = "CNY"
+input = "7.68"
+output = "38.4"
+cache_read = "1.536"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-0-pro-260215"]
+
+[[models."doubao-seed-2-0-pro-260215".tiers]]
+max_input_tokens = 32000
+input = "2.56"
+output = "12.8"
+cache_read = "0.512"
+cache_write_1h = "0.016"
+
+[[models."doubao-seed-2-0-pro-260215".tiers]]
+max_input_tokens = 128000
+input = "3.84"
+output = "19.2"
+cache_read = "0.768"
+cache_write_1h = "0.016"
+
+[models."doubao-seed-2-1-lite-260915"]
+currency = "CNY"
+input = "0.64"
+output = "2.16"
+cache_read = "0.128"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-1-lite-260915"]
+
+[models."doubao-seed-2-1-pro-260628"]
+currency = "CNY"
+input = "4.8"
+output = "24"
+cache_read = "0.96"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-1-pro-260628"]
+
+[models."doubao-seed-2-1-pro-260915"]
+currency = "CNY"
+input = "4.8"
+output = "24"
+cache_read = "0.96"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-1-pro-260915"]
+
+[models."doubao-seed-2-1-turbo-260628"]
+currency = "CNY"
+input = "2.4"
+output = "12"
+cache_read = "0.48"
+cache_write_1h = "0.016"
+aliases = ["openai/doubao-seed-2-1-turbo-260628"]
+
+[models."glm-4.5-air"]
+currency = "CNY"
+input = "0.96"
+output = "6.4"
+cache_read = "0.192"
+aliases = ["openai/glm-4.5-air"]
+
+[[models."glm-4.5-air".tiers]]
+max_input_tokens = 32000
+input = "0.64"
+output = "4.8"
+cache_read = "0.128"
+
+[models."glm-4.7"]
+currency = "CNY"
+input = "3.2"
+output = "12.8"
+cache_read = "0.64"
+aliases = ["openai/glm-4.7"]
+
+[[models."glm-4.7".tiers]]
+max_input_tokens = 32000
+input = "2.4"
+output = "11.2"
+cache_read = "0.48"
+
+[models."glm-5"]
+currency = "CNY"
+input = "4.8"
+output = "17.6"
+cache_read = "1.2"
+aliases = ["openai/glm-5"]
+
+[[models."glm-5".tiers]]
+max_input_tokens = 32000
+input = "3.2"
+output = "14.4"
+cache_read = "0.8"
+
+[models."glm-5-turbo"]
+currency = "CNY"
+input = "5.6"
+output = "20.8"
+cache_read = "1.44"
+aliases = ["openai/glm-5-turbo"]
+
+[[models."glm-5-turbo".tiers]]
+max_input_tokens = 32000
+input = "4"
+output = "17.6"
+cache_read = "0.96"
+
+[models."glm-5.1"]
+currency = "CNY"
+input = "6.4"
+output = "22.4"
+cache_read = "1.6"
+aliases = ["openai/glm-5.1"]
+
+[[models."glm-5.1".tiers]]
+max_input_tokens = 32000
+input = "4.8"
+output = "19.2"
+cache_read = "1.04"
+
+[models."glm-5.2"]
+currency = "CNY"
+input = "6.4"
+output = "22.4"
+cache_read = "1.6"
+aliases = ["openai/glm-5.2"]
+
+[models."glm-5.3"]
+currency = "CNY"
+input = "6.4"
+output = "22.4"
+cache_read = "1.6"
+aliases = ["openai/glm-5.3"]
+
+[models."glm-5.3-flash"]
+currency = "CNY"
+input = "0.64"
+output = "2.24"
+cache_read = "0.184"
+aliases = ["openai/glm-5.3-flash"]
+
+[models."glm-5.3-flashx"]
+currency = "CNY"
+input = "1.6"
+output = "5.6"
+cache_read = "0.456"
+aliases = ["openai/glm-5.3-flashx"]
+
+[models."hunyuan-role-latest"]
+currency = "CNY"
+input = "1.92"
+output = "7.68"
+aliases = ["openai/hunyuan-role-latest"]
+
+[models."hy3"]
+currency = "CNY"
+input = "0.8"
+output = "3.2"
+cache_read = "0.2"
+aliases = ["openai/hy3"]
+
+[models."hy4"]
+currency = "CNY"
+input = "4.8"
+output = "14.4"
+cache_read = "0.24"
+aliases = ["openai/hy4"]
+
+[models."hy4-flash"]
+currency = "CNY"
+input = "0.4"
+output = "1.6"
+cache_read = "0.016"
+aliases = ["openai/hy4-flash"]
+
+[models."hy4-preview"]
+currency = "CNY"
+input = "4.8"
+output = "14.4"
+cache_read = "0.24"
+aliases = ["openai/hy4-preview"]
+
+[models."kimi-k2.6"]
+currency = "CNY"
+input = "5.2"
+output = "21.5999999999992"
+cache_read = "0.8800000000012"
+aliases = ["openai/kimi-k2.6"]
+
+[models."kimi-k2.7-code"]
+currency = "CNY"
+input = "5.2"
+output = "21.5999999999992"
+cache_read = "1.04"
+aliases = ["openai/kimi-k2.7-code"]
+
+[models."kimi-k3"]
+currency = "CNY"
+input = "16"
+output = "80"
+cache_read = "1.6"
+cache_write = "16"
+cache_write_1h = "32"
+aliases = ["openai/kimi-k3"]
+
+[models."kimi-k3.1-pro"]
+currency = "CNY"
+input = "10.4"
+output = "54.4"
+cache_read = "1.04"
+cache_write = "10.4"
+cache_write_1h = "20.8"
+aliases = ["openai/kimi-k3.1-pro"]
+
+[models."kimi-k3.1-pro-highspeed"]
+currency = "CNY"
+input = "20.8"
+output = "108.8"
+cache_read = "1.04"
+cache_write = "20.8"
+cache_write_1h = "41.6"
+aliases = ["openai/kimi-k3.1-pro-highspeed"]
+
+[models."qwen-doc-turbo"]
+currency = "CNY"
+input = "0.48"
+output = "0.80000000000016"
+cache_read = "0.096"
+cache_write = "0.6"
+aliases = ["openai/qwen-doc-turbo"]
+
+[models."qwen3.5-flash"]
+currency = "CNY"
+input = "0.96"
+output = "9.6"
+cache_read = "0.096"
+cache_write = "1.2"
+aliases = ["openai/qwen3.5-flash"]
+
+[[models."qwen3.5-flash".tiers]]
+max_input_tokens = 128000
+input = "0.16"
+output = "1.6"
+cache_read = "0.016"
+cache_write = "0.2"
+
+[[models."qwen3.5-flash".tiers]]
+max_input_tokens = 256000
+input = "0.64"
+output = "6.4"
+cache_read = "0.064"
+cache_write = "0.8"
+
+[models."qwen3.5-plus"]
+currency = "CNY"
+input = "3.2"
+output = "19.2"
+cache_read = "0.32"
+cache_write = "4"
+aliases = ["openai/qwen3.5-plus"]
+
+[[models."qwen3.5-plus".tiers]]
+max_input_tokens = 128000
+input = "0.64"
+output = "3.84"
+cache_read = "0.064"
+cache_write = "0.8"
+
+[[models."qwen3.5-plus".tiers]]
+max_input_tokens = 256000
+input = "1.6"
+output = "9.6"
+cache_read = "0.16"
+cache_write = "2"
+
+[models."qwen3.6-27b"]
+currency = "CNY"
+input = "2.4"
+output = "14.4"
+aliases = ["openai/qwen3.6-27b"]
+
+[models."qwen3.6-35b-a3b"]
+currency = "CNY"
+input = "1.44"
+output = "8.64"
+aliases = ["openai/qwen3.6-35b-a3b"]
+
+[models."qwen3.6-flash"]
+currency = "CNY"
+input = "3.84"
+output = "23.04"
+cache_read = "0.384"
+cache_write = "4.8"
+aliases = ["openai/qwen3.6-flash"]
+
+[[models."qwen3.6-flash".tiers]]
+max_input_tokens = 256000
+input = "0.96"
+output = "5.76"
+cache_read = "0.096"
+cache_write = "1.2"
+
+[models."qwen3.6-plus"]
+currency = "CNY"
+input = "6.4"
+output = "38.4"
+cache_read = "0.64"
+cache_write = "8"
+aliases = ["openai/qwen3.6-plus"]
+
+[[models."qwen3.6-plus".tiers]]
+max_input_tokens = 256000
+input = "1.6"
+output = "9.6"
+cache_read = "0.16"
+cache_write = "2"
+
+[models."qwen3.7-max"]
+currency = "CNY"
+input = "9.6"
+output = "28.8"
+cache_read = "1.92"
+cache_write = "12"
+aliases = ["openai/qwen3.7-max"]
+
+[models."qwen3.7-plus"]
+currency = "CNY"
+input = "4.8"
+output = "19.2"
+cache_read = "0.96"
+cache_write = "6"
+aliases = ["openai/qwen3.7-plus"]
+
+[[models."qwen3.7-plus".tiers]]
+max_input_tokens = 256000
+input = "1.6"
+output = "6.4"
+cache_read = "0.32"
+cache_write = "2"
+
+[models."qwen3.7-text-embedding"]
+currency = "CNY"
+input = "0.4"
+output = "0.4"
+aliases = ["openai/qwen3.7-text-embedding"]
+
+[models."qwen3.7-text-rerank"]
+currency = "CNY"
+input = "0.4"
+output = "0.4"
+aliases = ["openai/qwen3.7-text-rerank"]
+
+[models."qwen3.8-flash"]
+currency = "CNY"
+input = "0.64"
+output = "2.16"
+cache_read = "0.08"
+cache_write = "1"
+aliases = ["openai/qwen3.8-flash"]
+
+[models."qwen3.8-max-0902"]
+currency = "CNY"
+input = "9.6"
+output = "28.8"
+cache_read = "1.2"
+cache_write = "12"
+aliases = ["openai/qwen3.8-max-0902"]
+
+[models."qwen4-max"]
+currency = "CNY"
+input = "8"
+output = "24"
+cache_read = "0.4"
+cache_write = "10"
+cache_write_1h = "16"
+aliases = ["openai/qwen4-max"]
+
+[models."thingo-lite"]
+currency = "CNY"
+input = "0.08"
+output = "0.24"
+cache_read = "0.008"
+cache_write = "0.096"
+aliases = ["openai/thingo-lite"]
+
+[models."thingo-pro"]
+currency = "CNY"
+input = "0.16"
+output = "0.48"
+cache_read = "0.016"
+cache_write = "0.192"
+aliases = ["openai/thingo-pro"]
+
+# intlapi.thingo.com.cn/api/pricing · gpt-特惠 · 分组倍率 0.03
+
+[models."gpt-5.6-sol"]
+currency = "CNY"
+input = "1.3632"
+output = "5.112"
+cache_read = "0.13632"
+aliases = ["openai/gpt-5.6-sol"]
+
+[[models."gpt-5.6-sol".tiers]]
+max_input_tokens = 272000
+input = "0.6816"
+output = "3.408"
+cache_read = "0.06816"
+
+[models."gpt-5.6-sol".service_tiers]
+priority = "2"
+
+[models."gpt-5.6-terra"]
+currency = "CNY"
+input = "0.6816"
+output = "3.0672"
+cache_read = "0.06816"
+aliases = ["openai/gpt-5.6-terra"]
+
+[[models."gpt-5.6-terra".tiers]]
+max_input_tokens = 272000
+input = "0.3408"
+output = "2.0448"
+cache_read = "0.03408"
+
+[models."gpt-5.6-terra".service_tiers]
+fast = "2"
+priority = "2"
+
+[models."gpt-6-astra"]
+currency = "CNY"
+input = "3.408"
+output = "12.78"
+cache_read = "0.3408"
+cache_write = "4.26"
+aliases = ["openai/gpt-6-astra"]
+
+[[models."gpt-6-astra".tiers]]
+max_input_tokens = 272000
+input = "1.704"
+output = "8.52"
+cache_read = "0.1704"
+cache_write = "2.13"
+
+[models."gpt-6-sol"]
+currency = "CNY"
+input = "0.6816"
+output = "2.556"
+cache_read = "0.06816"
+cache_write = "0.852"
+aliases = ["openai/gpt-6-sol"]
+
+[[models."gpt-6-sol".tiers]]
+max_input_tokens = 272000
+input = "0.3408"
+output = "1.704"
+cache_read = "0.03408"
+cache_write = "0.426"
+
+[models."gpt-6.1-sol"]
+currency = "CNY"
+input = "0.6816"
+output = "2.556"
+cache_read = "0.06816"
+cache_write = "0.852"
+aliases = ["openai/gpt-6.1-sol"]
+
+[[models."gpt-6.1-sol".tiers]]
+max_input_tokens = 272000
+input = "0.3408"
+output = "1.704"
+cache_read = "0.03408"
+cache_write = "0.426"
+
+[models."gpt-6.1-sol".service_tiers]
+fast = "2"
+priority = "2"
+
+[models."gpt-6.1-terra"]
+currency = "CNY"
+input = "0.3408"
+output = "1.278"
+cache_read = "0.01704"
+cache_write = "0.426"
+aliases = ["openai/gpt-6.1-terra"]
+
+[[models."gpt-6.1-terra".tiers]]
+max_input_tokens = 272000
+input = "0.1704"
+output = "0.852"
+cache_read = "0.00864"
+cache_write = "0.21312"
+
+[models."gpt-6.1-terra".service_tiers]
+fast = "2"
+priority = "2"
+
+[models."gpt-6.2-astra"]
+currency = "CNY"
+input = "2.7264"
+output = "10.224"
+cache_read = "0.13632"
+cache_write = "3.408"
+cache_write_1h = "6.816"
+aliases = ["openai/gpt-6.2-astra"]
+
+[[models."gpt-6.2-astra".tiers]]
+max_input_tokens = 272000
+input = "1.3632"
+output = "6.816"
+cache_read = "0.06816"
+cache_write = "1.704"
+cache_write_1h = "3.408"
+
+[models."gpt-6.2-astra".service_tiers]
+fast = "2"
+priority = "2"
+ultrafast = "3"
+
+[models."gpt-6.2-sol"]
+currency = "CNY"
+input = "0.6816"
+output = "2.556"
+cache_read = "0.03408"
+cache_write = "0.852"
+cache_write_1h = "1.704"
+aliases = ["openai/gpt-6.2-sol"]
+
+[[models."gpt-6.2-sol".tiers]]
+max_input_tokens = 272000
+input = "0.3408"
+output = "1.704"
+cache_read = "0.01704"
+cache_write = "0.426"
+cache_write_1h = "0.852"
+
+[models."gpt-6.2-sol".service_tiers]
+fast = "2"
+priority = "2"
+ultrafast = "3"
+
+# intlapi.thingo.com.cn/api/pricing · gemini-特惠 · 分组倍率 0.06
+
+[models."gemini-3.1-flash-lite"]
+currency = "CNY"
+input = "0.0852"
+output = "0.5112"
+cache_read = "0.00852"
+aliases = ["openai/gemini-3.1-flash-lite"]
+
+[models."gemini-3.5-flash"]
+currency = "CNY"
+input = "0.5112"
+output = "3.0672"
+cache_read = "0.05112"
+aliases = ["openai/gemini-3.5-flash"]
+
+[models."gemini-3.6-flash"]
+currency = "CNY"
+input = "0.2556"
+output = "1.278"
+cache_read = "0.02556"
+aliases = ["openai/gemini-3.6-flash"]
+
+[models."gemini-3.7-flash"]
+currency = "CNY"
+input = "0.2556"
+output = "1.278"
+cache_read = "0.02556"
+aliases = ["openai/gemini-3.7-flash"]
+
+[models."gemini-3.8-flash"]
+currency = "CNY"
+input = "0.2556"
+output = "1.278"
+cache_read = "0.02556"
+aliases = ["openai/gemini-3.8-flash"]

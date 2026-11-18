@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from .ledger import finish_call, initialize_ledger, start_call, store_call, utc_now
-from .pricing import (TokenRates, TokenUsage, estimate_cost, load_prices, price_snapshot,
+from .pricing import (TokenRates, TokenUsage, estimate_cost, load_prices, parse_rates, price_snapshot,
                       rates_snapshot, select_rates)
 
 
@@ -23,6 +23,7 @@ def read_response_usage(response) -> TokenUsage:
     usage = getattr(response, "usage", None)
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     output_details = getattr(usage, "completion_tokens_details", None)
+    cache_creation = getattr(prompt_details, "cache_creation_token_details", None)
     return TokenUsage(
         input_tokens=_token_count(getattr(usage, "prompt_tokens", None)),
         output_tokens=_token_count(getattr(usage, "completion_tokens", None)),
@@ -38,6 +39,7 @@ def read_response_usage(response) -> TokenUsage:
             getattr(usage, "cache_creation_input_tokens", None),
         ),
         reasoning_tokens=_token_count(getattr(output_details, "reasoning_tokens", None)),
+        cache_write_1h_tokens=_token_count(getattr(cache_creation, "ephemeral_1h_input_tokens", None)),
     )
 
 
@@ -75,7 +77,8 @@ class UsageRecorder:
     def prepare_call(self, *, model: str, api_key_env: str = "", base_url: str | None = None,
                      rates: TokenRates | None = None, source: str = "completion",
                      call_id: str | None = None, started_at: str | None = None,
-                     time_source: str = "request_start", metadata: dict | None = None) -> dict:
+                     time_source: str = "request_start", metadata: dict | None = None,
+                     service_tier: str | None = None) -> dict:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model 必须是非空字符串")
         price_model, configured_rates = self.prices.get(model, (None, None))
@@ -87,18 +90,23 @@ class UsageRecorder:
         timestamp = datetime.fromisoformat(started_at)
         if timestamp.utcoffset() is None:
             raise ValueError("started_at 必须是包含时区的 ISO 时间")
-        period, multiplier, rule = None, None, None
+        rule = None
+        currency = rates.currency if rates is not None else None
+        selected, period, multiplier = None, None, None
         if rates is not None:
-            rule = price_snapshot(rates) if rates.off_peak is not None else None
-            rates, period, multiplier = select_rates(rates, timestamp)
+            selected, period, multiplier = select_rates(rates, timestamp, service_tier=service_tier)
+            if rates.has_pricing_rule:
+                rule = price_snapshot(rates)
+                if isinstance(service_tier, str) and service_tier in dict(rates.service_tiers):
+                    rule["service_tier"] = service_tier
         return {
             "call_id": call_id or uuid4().hex, "project_id": self.project_id, "user_id": self.user_id,
             "started_at": timestamp.astimezone(UTC).isoformat(timespec="microseconds"), "requested_model": model,
             "api_key_env": api_key_env, "endpoint_host": urlsplit(base_url).hostname if base_url else None,
             "source": source, "pricing_model": price_model, "time_source": time_source,
             "metadata_json": json.dumps(metadata or {}, ensure_ascii=False, allow_nan=False),
-            "currency": rates.currency if rates else None,
-            "rates_per_million": json.dumps(rates_snapshot(rates)) if rates else None,
+            "currency": currency,
+            "rates_per_million": json.dumps(rates_snapshot(selected)) if selected is not None else None,
             "pricing_period": period,
             "pricing_multiplier": str(multiplier) if multiplier is not None else None,
             "pricing_rule_json": json.dumps(rule) if rule is not None else None,
@@ -113,7 +121,7 @@ class UsageRecorder:
                     provider_request_id: str | None = None) -> dict:
         try:
             return finish_call(self.ledger_path, call["call_id"], status=status, details={
-                **usage_details(usage or usage_fields(None), self._rates(call)),
+                **self._finish_details(call, usage or TokenUsage()),
                 "error_type": error_type, "response_model": response_model,
                 "response_id": response_id, "provider_request_id": provider_request_id,
             })
@@ -129,17 +137,26 @@ class UsageRecorder:
         kwargs.setdefault("time_source", "recorded")
         call = self.prepare_call(**kwargs)
         return store_call(self.ledger_path, {
-            **call, **usage_details(usage, self._rates(call)), "status": status,
+            **call, **self._finish_details(call, usage), "status": status,
             "source_status": source_status, "finished_at": finished_at or utc_now(),
             "response_model": response_model, "response_id": response_id, "error_type": error_type,
         })
 
     @staticmethod
-    def _rates(call: dict) -> TokenRates | None:
-        from decimal import Decimal
-
-        values = json.loads(call["rates_per_million"]) if call["rates_per_million"] else None
-        if values is None:
-            return None
-        return TokenRates(**{name: Decimal(value) if name != "currency" and value is not None else value
-                             for name, value in values.items()})
+    def _finish_details(call: dict, usage: TokenUsage) -> dict:
+        rule = json.loads(call.get("pricing_rule_json") or "null")
+        snapshot = json.loads(call["rates_per_million"] or "null")
+        pricing = {}
+        if rule is not None and "tiers" in rule:
+            rates, period, multiplier = select_rates(
+                parse_rates(rule), datetime.fromisoformat(call["started_at"]),
+                usage=usage, service_tier=rule.get("service_tier"),
+            )
+            pricing = {
+                "rates_per_million": json.dumps(rates_snapshot(rates)) if rates is not None else None,
+                "pricing_period": period,
+                "pricing_multiplier": str(multiplier) if multiplier is not None else None,
+            }
+        else:
+            rates = parse_rates(snapshot) if snapshot is not None else None
+        return {**pricing, **usage_details(usage, rates)}

@@ -61,13 +61,22 @@ def _options(kwargs):
     return options
 
 
+def _service_tier(options):
+    extra_body = options.get("extra_body")
+    value = options.get("service_tier")
+    if isinstance(extra_body, dict):
+        value = extra_body.get("service_tier", value)
+    return value if isinstance(value, str) else None
+
+
 def _complete(recorder, model, messages, kwargs, *, rates=None, api_key_env=""):
     from litellm import completion as native_completion
 
     options = _options(kwargs)
     key = options.get("api_key")
     call = recorder.begin_call(model=_safe(model, key), api_key_env=_safe(api_key_env, key),
-                               base_url=options.get("api_base") or options.get("base_url"), rates=rates)
+                               base_url=options.get("api_base") or options.get("base_url"), rates=rates,
+                               service_tier=_service_tier(options))
     try:
         response = native_completion(model=model, messages=messages, **options)
     except BaseException as error:
@@ -92,7 +101,8 @@ async def acompletion(model, messages, **kwargs):
     options = _options(kwargs)
     key = options.get("api_key")
     call = recorder.begin_call(model=_safe(model, key), source="acompletion",
-                               base_url=options.get("api_base") or options.get("base_url"))
+                               base_url=options.get("api_base") or options.get("base_url"),
+                               service_tier=_service_tier(options))
     try:
         response = await native_acompletion(model=model, messages=messages, **options)
     except BaseException as error:

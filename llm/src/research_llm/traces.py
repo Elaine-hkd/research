@@ -24,7 +24,8 @@ def summarize_calls(rows: list[dict]) -> dict:
 
 def import_traces(recorder: UsageRecorder, paths, *, model: str, api_key_env: str = "",
                   base_url: str | None = None, metadata: dict | None = None,
-                  log_path: str | Path | None = None, start_offsets: dict | None = None) -> dict:
+                  log_path: str | Path | None = None, start_offsets: dict | None = None,
+                  service_tier: str | None = None) -> dict:
     """逐次导入已 flush 的 trace，覆盖失败运行和子会话；重复导入不重新计价。"""
     rows = {}
     paths = list(dict.fromkeys(Path(path).resolve() for path in paths))
@@ -71,7 +72,9 @@ def import_traces(recorder: UsageRecorder, paths, *, model: str, api_key_env: st
                 if not isinstance(event_time, (int, float)) or isinstance(event_time, bool):
                     raise ValueError(f"{path} 的模型尝试缺少时间")
                 timestamp = datetime.fromtimestamp(event_time / 1000, UTC).isoformat(timespec="microseconds")
-                observed_model = safe((event.get("model") or {}).get("model") or model)
+                model_details = event.get("model") or {}
+                observed_model = safe(model_details.get("model") or model)
+                observed_tier = data.get("service_tier") or model_details.get("service_tier") or service_tier
                 error = data.get("error")
                 row = recorder.record_usage(
                     model=observed_model, api_key_env=safe(api_key_env), base_url=base_url,
@@ -79,6 +82,7 @@ def import_traces(recorder: UsageRecorder, paths, *, model: str, api_key_env: st
                     source=event.get("harness") or "trace", call_id=call_id,
                     started_at=timestamp, finished_at=timestamp, time_source=time_source,
                     response_model=observed_model, response_id=safe(data.get("response_id")),
+                    service_tier=safe(observed_tier) if isinstance(observed_tier, str) else None,
                     error_type=error.get("type") if isinstance(error, dict) else None,
                     metadata=safe({**metadata, "recording_id": event["recording_id"],
                               "run_id": event.get("run_id"), "session_id": event["session_id"],

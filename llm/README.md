@@ -24,8 +24,8 @@ configure(
 response = completion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["PROJECT_DEEPSEEK_API_KEY"],
-    api_base="https://api.deepseek.com",
+    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
 )
 print(response.choices[0].message.content)
@@ -44,8 +44,8 @@ from research_llm import acompletion
 response = await acompletion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["PROJECT_DEEPSEEK_API_KEY"],
-    api_base="https://api.deepseek.com",
+    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
 )
 ```
@@ -56,8 +56,8 @@ response = await acompletion(
 with completion(
     model="deepseek/deepseek-flash",
     messages=[{"role": "user", "content": "请回复 OK"}],
-    api_key=os.environ["PROJECT_DEEPSEEK_API_KEY"],
-    api_base="https://api.deepseek.com",
+    api_key=os.environ["DASHSCOPE_API_KEY"],
+    api_base="https://uniapi.thingo.com.cn/v1",
     max_tokens=64,
     stream=True,
 ) as stream:
@@ -70,53 +70,19 @@ with completion(
 
 ## 团队价格
 
-默认价格集中在 `src/research_llm/prices.toml`，它会随独立包一起安装。下面列出 DeepSeek 的峰价和 Qwen 的固定价，币种为 `CNY`：
+默认价格集中在 `src/research_llm/prices.toml`，随独立包一起安装。价格文件记录 2026-11-18 的 Thingo 公开价目。所有单价以人民币每百万 token 计，已经乘过分组倍率和团队的 `0.8` 折扣。国内全模型-标准-文本、gpt-特惠和 gemini-特惠相对各自基础价的系数分别为 `0.8`、`0.024`、`0.048`。调用时会读取本地价格表。 [国内站价目](https://uniapi.thingo.com.cn/api/pricing) · [国际站价目](https://intlapi.thingo.com.cn/api/pricing)
 
-| 模型 | 输入（未命中缓存）/ 1M token | 输入（命中缓存）/ 1M token | 输出 / 1M token |
-|---|---:|---:|---:|
-| deepseek-flash | ¥2 | ¥0.04 | ¥8 |
-| qwen-3.8-max | ¥12 | ¥1 | ¥36 |
-
-这些是团队配置的审核价格，不会从服务商自动抓取。价格文件示例：
-
-```toml
-[models.deepseek-flash]
-currency = "CNY"
-input = "2"
-output = "8"
-cache_read = "0.04"
-aliases = ["deepseek-v4-flash", "deepseek/deepseek-flash", "deepseek/deepseek-v4-flash"]
-
-[models.deepseek-flash.off_peak]
-peak_hours = [["09:00", "12:00"], ["14:00", "18:00"]]
-multiplier = "0.5"
-
-[models."qwen-3.8-max"]
-currency = "CNY"
-input = "12"
-output = "36"
-cache_read = "1"
-aliases = ["openai/qwen-3.8-max", "qwen-3.8", "openai/qwen-3.8"]
-```
-
-Qwen 使用本次指定的 `qwen-3.8-max` 作为价格名称，输入和输出沿用此前配置的 ¥12、¥36。
-原示例的 `qwen-3.8`、`openai/qwen-3.8` 保留为计价别名；别名不会替换请求中的模型名。
-
-只有 DeepSeek 配置了 `off_peak`。它每天按北京时间（固定 UTC+08:00）判断：09:00–12:00、14:00–18:00 使用表中的峰价，其余时间乘以 `0.5`，不区分星期和节假日。开始边界包含在峰段中，结束边界不包含，因此 09:00、14:00 为峰价，12:00、18:00 为谷价。谷价分别是输入 ¥1、缓存读取 ¥0.02、输出 ¥4 / 1M token；缓存写入价也乘以相同系数。
-
-分时规则属于具体模型及其计价别名，不会自动应用到其他模型。Qwen 没有 `off_peak`，全天保持固定价格。调整 DeepSeek 的时段或系数，只需修改它下面的 `peak_hours`、`multiplier`；删除该配置表则恢复固定价。峰段使用同一天内的 `HH:MM` 起止时间，不允许重叠；系数必须在 0 至 1 之间。自定义价格文件如果没有配置 `off_peak`，也继续使用固定价。
+- `tiers` 按表中顺序匹配。每档可配置 `max_input_tokens`、`max_output_tokens`，最大值包含在本档内。按含缓存的完整输入量和输出量选档，匹配的单价适用于整次请求。没有匹配档位时使用模型表中的单价。
+- `off_peak` 用于分时价格。DeepSeek 的峰段是每天北京时间 09:00–12:00 和 14:00–18:00，包含开始时间。其余时间单价乘以 `0.5`。可在对应模型的 `peak_hours` 和 `multiplier` 中调整。
+- `service_tiers` 里列出请求参数 `service_tier` 对应的额外倍率。直调入口从请求参数读取，trace 导入优先读模型尝试中的档位，其次读取 OpenHands 的 `litellm_extra_body.service_tier`。普通请求按标准档计价。
 
 需要使用自己的价格表时，复制这份文件并调用 `configure(..., prices_path="config/prices.toml")`。自定义文件整体替代内置价格，不与默认价格隐式合并。模型名称精确匹配，`aliases` 只用于选价，不改写发往服务商的模型名称；新路由、SDK 返回的模型名或其他模型需要显式添加。未匹配到价格时照常记录 token，`cost_status` 为 `missing_rates`，金额留空。
 
-TOML 中省略 `cache_read`、`cache_write` 时，缓存按普通输入单价计费；单独填写这两项后，计算时先从输入中扣除缓存 token，再按各自单价计费。输出已经包含推理 token，不重复累加。输入与输出齐全时即可计价；缺失的 `total_tokens` 仍保存为空。缺失必要计数、负数或彼此冲突的计数会明确记录为未知费用，不用零补齐。金额使用 `Decimal` 计算、字符串保存。当前仅按文本 token 估算，不含图片、音频、外部工具、阶梯价等额外费用。
+省略 `cache_read`、`cache_write` 时，对应缓存按普通输入单价计费。`cache_write_1h` 单独指定 1 小时缓存写入价，`cache_write_1h_tokens` 是缓存写入总数中的子集。输出 token 已包含推理 token。缺少必要的缓存计数时标记为 `missing_usage`，明确返回 0 时照常计价。金额使用 `Decimal` 计算并以字符串保存，估算范围是文本 token。
 
-当前两种模型均已单独配置缓存读取价，缓存写入仍按普通输入单价计费。
-若响应没有报告缓存读取数，计价时不能把未知当成零，记录会标记为 `missing_usage`；明确报告 0 时照常计价。
-SQLite 和 `usage.jsonl` 均保留 `cache_read_tokens`、`cache_write_tokens` 以及实际使用的单价快照。
+每条记录保存模型、币种、本次采用的 `rates_per_million`、估算额和状态。`pricing_period` 记录时段或阶梯，`pricing_multiplier` 记录本次另行应用的倍率。有选价规则的模型会同时保留规则快照，SQLite 中是 `pricing_rule_json`，`usage.jsonl` 中是 `pricing_rule`。
 
-每条记录都保存 `pricing_model`、`currency`、`rates_per_million`、`estimated_cost` 和 `cost_status`，并通过 `pricing_period`（`peak`、`off_peak` 或 `fixed`）和 `pricing_multiplier` 记录实际时段与系数。`rates_per_million` 始终保存本次实际使用的单价，分时模型还会保存基础峰价和完整规则：SQLite 的字段是 `pricing_rule_json`，`usage.jsonl` 中展开为 `pricing_rule`。没有配置价格的模型，这些计价字段留空。
-
-同步、异步和流式调用都在请求开始时选价，跨越时段边界后继续使用开始时的单价。手工导入用量时，可以传入带时区的 ISO 格式 `started_at`；保存时统一转为 UTC，未提供时使用当前时间。历史记录不会随价格文件变化而更新。原有 `LLMClient(...).complete()` 仍返回 `Completion`，也复用这套计价和入账逻辑；它可以直接传入 `user_id`、`prices_path`，显式传入未配置 `off_peak` 的 `TokenRates` 时，使用该固定价覆盖价格文件，不依赖全局 `configure()`。
+同步、异步和流式调用在请求开始时保存价格快照，并按开始时间判断分时价格。阶梯价等到收到用量后再选档。手工导入可以传入带时区的 ISO 格式 `started_at`，账本统一存 UTC。历史记录不会随价格文件变化而更新。`LLMClient(...).complete()` 也复用这套流程，传入固定 `TokenRates` 可以覆盖该次调用的价格。
 
 ## OpenHands 和 DSH
 
@@ -174,7 +140,7 @@ accounting = UsageRecorder(
 )
 summary = import_traces(
     accounting, ["原 agent/trace/文件.jsonl"],
-    model="deepseek/deepseek-flash", api_key_env="DEEPSEEK_API_KEY",
+    model="deepseek/deepseek-flash", api_key_env="DASHSCOPE_API_KEY",
     log_path="logs/recovered-usage.jsonl",
 )
 ```
@@ -224,7 +190,7 @@ with TemporaryDirectory() as directory:
 from research_llm import UsageRecorder, TokenUsage
 
 recorder = UsageRecorder(project_id="daily-price-check", user_id="local-check", ledger_path="logs/daily-price-check.sqlite3")
-for model in ("deepseek-flash", "qwen-3.8-max"):
+for model in ("deepseek-flash", "qwen3.8-max-0902"):
     for hour in ("09:00", "12:00"):
         timestamp = "2026-11-15T" + hour + ":00+08:00"
         row = recorder.record_usage(
@@ -241,4 +207,4 @@ for model in ("deepseek-flash", "qwen-3.8-max"):
 python -m research_llm logs/daily-price-check.sqlite3 daily-price-check
 ```
 
-示例的输入全部命中缓存。使用内置价格时，DeepSeek 两行分别为 `peak / 1 / 8.04 CNY` 和 `off_peak / 0.5 / 4.02 CNY`；Qwen 两行均为 `fixed / 1 / 37 CNY`。项目合计 `86.06 CNY`，重复运行请求数仍为 4。完整 agent 验证沿用原 evaluation 命令，完成一个 trial 后核对上述三类产物；实际运行需要原有 Docker、SDK、注册中心和模型凭据，并会产生模型费用。独立包的同步、异步和流式调用也需按实际服务商验证，尚未确认宿主环境的运行兼容性。
+示例的输入全部命中缓存。使用内置价格时，DeepSeek 两行分别为 `peak / 1 / 6.432 CNY` 和 `off_peak / 0.5 / 3.216 CNY`，Qwen 两行均为 `fixed / 1 / 30 CNY`。首次写入新验证账本合计 `69.648 CNY`，重复导入仍为 4 条记录。完整 agent 验证沿用原 evaluation 命令，需要原有 Docker、SDK、注册中心和 Thingo 凭据，并会产生模型费用。

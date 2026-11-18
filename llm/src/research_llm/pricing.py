@@ -6,7 +6,7 @@ import tomllib
 
 
 _BEIJING = timezone(timedelta(hours=8))
-_RATE_FIELDS = ("input", "output", "cache_read", "cache_write")
+_RATE_FIELDS = ("input", "output", "cache_read", "cache_write", "cache_write_1h")
 
 
 def _minute_of_day(value: str) -> int:
@@ -56,26 +56,51 @@ class TokenRates:
     cache_read: Decimal | None = None
     cache_write: Decimal | None = None
     off_peak: DailyDiscount | None = None
+    cache_write_1h: Decimal | None = None
+    tiers: tuple["PriceTier", ...] = ()
+    service_tiers: tuple[tuple[str, Decimal], ...] = ()
 
     def __post_init__(self):
         if (len(self.currency) != 3 or not self.currency.isascii()
                 or not self.currency.isalpha() or not self.currency.isupper()):
             raise ValueError("currency 必须是三位大写币种代码")
-        for name in ("input", "output", "cache_read", "cache_write"):
+        for name in _RATE_FIELDS:
             rate = getattr(self, name)
-            if rate is None and name in ("cache_read", "cache_write"):
+            if rate is None and name in ("cache_read", "cache_write", "cache_write_1h"):
                 continue
             if not isinstance(rate, Decimal) or not rate.is_finite() or rate < 0:
                 raise ValueError(f"{name} 单价必须是有限的非负 Decimal")
         if self.off_peak is not None and not isinstance(self.off_peak, DailyDiscount):
             raise ValueError("off_peak 必须是 DailyDiscount")
+        if any(not isinstance(name, str) or not name.strip() or not isinstance(multiplier, Decimal)
+               or not multiplier.is_finite() or multiplier <= 0
+               for name, multiplier in self.service_tiers):
+            raise ValueError("service_tiers 需要非空档位名称和有限的正倍率")
+
+    @property
+    def has_pricing_rule(self) -> bool:
+        return bool(self.off_peak or self.tiers or self.service_tiers)
+
+
+@dataclass(frozen=True)
+class PriceTier:
+    rates: TokenRates
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+
+    def __post_init__(self):
+        limits = (self.max_input_tokens, self.max_output_tokens)
+        if all(limit is None for limit in limits) or any(
+            limit is not None and (type(limit) is not int or limit <= 0) for limit in limits
+        ):
+            raise ValueError("阶梯价至少需要一个正整数 token 上限")
 
 
 def rates_snapshot(rates: TokenRates) -> dict:
     """只保存实际单价，供本次费用计算和旧快照读取。"""
     return {"currency": rates.currency,
             **{name: str(getattr(rates, name)) if getattr(rates, name) is not None else None
-               for name in _RATE_FIELDS}}
+               for name in _RATE_FIELDS if name != "cache_write_1h" or rates.cache_write_1h is not None}}
 
 
 def price_snapshot(rates: TokenRates) -> dict:
@@ -84,25 +109,51 @@ def price_snapshot(rates: TokenRates) -> dict:
     if rates.off_peak is not None:
         values["off_peak"] = {"timezone": "+08:00", "peak_hours": rates.off_peak.peak_hours,
                               "multiplier": str(rates.off_peak.multiplier)}
+    if rates.tiers:
+        values["tiers"] = [
+            {**rates_snapshot(tier.rates),
+             **{name: getattr(tier, name) for name in ("max_input_tokens", "max_output_tokens")
+                if getattr(tier, name) is not None}}
+            for tier in rates.tiers
+        ]
+    if rates.service_tiers:
+        values["service_tiers"] = {name: str(multiplier) for name, multiplier in rates.service_tiers}
     return values
 
 
-def select_rates(rates: TokenRates, started_at: datetime) -> tuple[TokenRates, str, Decimal]:
-    """按调用时间选择单价，返回实际单价、时段和系数；不计算 token 费用。"""
+def select_rates(rates: TokenRates, started_at: datetime, *, usage: "TokenUsage | None" = None,
+                 service_tier: str | None = None) -> tuple[TokenRates | None, str | None, Decimal | None]:
+    """按整次请求的 token 用量、开始时间和服务档位选择单价。"""
     if started_at.utcoffset() is None:
         raise ValueError("计价时间必须包含时区")
-    if rates.off_peak is None:
+    if not rates.has_pricing_rule:
         return rates, "fixed", Decimal(1)
-    local = started_at.astimezone(_BEIJING)
-    minute = local.hour * 60 + local.minute
-    peak = any(_minute_of_day(start) <= minute < _minute_of_day(end)
-               for start, end in rates.off_peak.peak_hours)
-    multiplier = Decimal(1) if peak else rates.off_peak.multiplier
-    effective = TokenRates(currency=rates.currency, **{
-        name: getattr(rates, name) * multiplier if getattr(rates, name) is not None else None
+    selected, period = rates, "fixed"
+    if rates.tiers:
+        if usage is None or type(usage.input_tokens) is not int or type(usage.output_tokens) is not int:
+            return None, None, None
+        period = f"tier_{len(rates.tiers) + 1}"
+        for index, tier in enumerate(rates.tiers, 1):
+            if ((tier.max_input_tokens is None or usage.input_tokens <= tier.max_input_tokens)
+                    and (tier.max_output_tokens is None or usage.output_tokens <= tier.max_output_tokens)):
+                selected, period = tier.rates, f"tier_{index}"
+                break
+    multiplier = Decimal(1)
+    if rates.off_peak is not None:
+        local = started_at.astimezone(_BEIJING)
+        minute = local.hour * 60 + local.minute
+        peak = any(_minute_of_day(start) <= minute < _minute_of_day(end)
+                   for start, end in rates.off_peak.peak_hours)
+        multiplier = Decimal(1) if peak else rates.off_peak.multiplier
+        time_period = "peak" if peak else "off_peak"
+        period = f"{period}_{time_period}" if rates.tiers else time_period
+    if isinstance(service_tier, str):
+        multiplier *= dict(rates.service_tiers).get(service_tier, Decimal(1))
+    effective = TokenRates(currency=selected.currency, **{
+        name: getattr(selected, name) * multiplier if getattr(selected, name) is not None else None
         for name in _RATE_FIELDS
     })
-    return effective, "peak" if peak else "off_peak", multiplier
+    return effective, period, multiplier
 
 
 @dataclass(frozen=True)
@@ -113,6 +164,45 @@ class TokenUsage:
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
+
+
+def parse_rates(values: dict) -> TokenRates:
+    """从配置或价格快照恢复单价和选价规则。"""
+    currency = values["currency"]
+    input_price = values["input"]
+    rates = {"input": Decimal(str(input_price)), "output": Decimal(str(values["output"]))}
+    for field in _RATE_FIELDS[2:]:
+        default = input_price if field in ("cache_read", "cache_write") else None
+        value = values.get(field, default)
+        rates[field] = Decimal(str(value)) if value is not None else None
+    discount = None
+    if "off_peak" in values:
+        rule = values["off_peak"]
+        if (not isinstance(rule, dict) or rule.keys() - {"peak_hours", "multiplier", "timezone"}
+                or not {"peak_hours", "multiplier"} <= rule.keys()
+                or rule.get("timezone", "+08:00") != "+08:00"):
+            raise ValueError("off_peak 需要 peak_hours、multiplier，时区为 +08:00")
+        hours = rule["peak_hours"]
+        if not isinstance(hours, (list, tuple)) or any(not isinstance(interval, (list, tuple)) for interval in hours):
+            raise ValueError("peak_hours 必须是起止时间数组的列表")
+        discount = DailyDiscount(tuple(tuple(interval) for interval in hours), Decimal(str(rule["multiplier"])))
+    tiers = values.get("tiers", [])
+    if not isinstance(tiers, list) or any(
+        not isinstance(tier, dict)
+        or tier.keys() - {*_RATE_FIELDS, "currency", "max_input_tokens", "max_output_tokens"}
+        or tier.get("currency", currency) != currency for tier in tiers
+    ):
+        raise ValueError("tiers 必须是包含 token 上限和同币种单价的配置表列表")
+    service_tiers = values.get("service_tiers", {})
+    if not isinstance(service_tiers, dict):
+        raise ValueError("service_tiers 必须是服务档位到倍率的配置表")
+    return TokenRates(
+        currency=currency, **rates, off_peak=discount,
+        tiers=tuple(PriceTier(parse_rates({**tier, "currency": currency}), tier.get("max_input_tokens"),
+                              tier.get("max_output_tokens")) for tier in tiers),
+        service_tiers=tuple((name, Decimal(str(multiplier))) for name, multiplier in service_tiers.items()),
+    )
 
 
 def load_prices(path: str | Path | None = None) -> dict[str, tuple[str, TokenRates]]:
@@ -126,28 +216,12 @@ def load_prices(path: str | Path | None = None) -> dict[str, tuple[str, TokenRat
     for model, values in config["models"].items():
         if not model.strip() or not isinstance(values, dict):
             raise ValueError("价格模型名称不能为空，价格项必须是配置表")
-        if extra := values.keys() - {"currency", "input", "output", "cache_read", "cache_write", "aliases", "off_peak"}:
+        if extra := values.keys() - {*_RATE_FIELDS, "currency", "aliases", "off_peak", "tiers", "service_tiers"}:
             raise ValueError(f"{model} 包含未知价格字段：{sorted(extra)}")
         aliases = values.get("aliases", [])
         if not isinstance(aliases, list) or any(not isinstance(v, str) or not v.strip() for v in aliases):
             raise ValueError(f"{model} 的 aliases 必须是非空字符串列表")
-        discount = None
-        if "off_peak" in values:
-            rule = values["off_peak"]
-            if not isinstance(rule, dict) or set(rule) != {"peak_hours", "multiplier"}:
-                raise ValueError(f"{model} 的 off_peak 需要且仅支持 peak_hours、multiplier")
-            hours = rule["peak_hours"]
-            if not isinstance(hours, list) or any(not isinstance(interval, list) for interval in hours):
-                raise ValueError(f"{model} 的 peak_hours 必须是起止时间数组的列表")
-            discount = DailyDiscount(tuple(tuple(interval) for interval in hours),
-                                     Decimal(str(rule["multiplier"])))
-        rates = TokenRates(
-            currency=values["currency"],
-            input=Decimal(str(values["input"])), output=Decimal(str(values["output"])),
-            cache_read=Decimal(str(values.get("cache_read", values["input"]))),
-            cache_write=Decimal(str(values.get("cache_write", values["input"]))),
-            off_peak=discount,
-        )
+        rates = parse_rates(values)
         for name in (model, *aliases):
             if name in prices:
                 raise ValueError(f"价格模型名称或别名重复：{name}")
@@ -164,8 +238,10 @@ def estimate_cost(usage: TokenUsage, rates: TokenRates | None) -> tuple[Decimal 
         return None, "missing_usage"
     read = usage.cache_read_tokens or 0
     write = usage.cache_write_tokens or 0
+    write_1h = usage.cache_write_1h_tokens or 0
     uncached = usage.input_tokens - read - write
-    if (uncached < 0 or (usage.total_tokens is not None
+    if (uncached < 0 or (usage.cache_write_tokens is not None and write_1h > write)
+            or (usage.total_tokens is not None
                         and usage.total_tokens != usage.input_tokens + usage.output_tokens)
             or (usage.reasoning_tokens or 0) > usage.output_tokens):
         return None, "inconsistent_usage"
@@ -177,6 +253,14 @@ def estimate_cost(usage: TokenUsage, rates: TokenRates | None) -> tuple[Decimal 
                         (usage.cache_write_tokens, rates.cache_write)):
         if count is None and rate is not None and rate != rates.input:
             return None, "missing_usage"
+    if write_1h and usage.cache_write_tokens is None:
+        return None, "missing_usage"
+    if (rates.cache_write_1h is not None and rates.cache_write_1h != rates.cache_write
+            and usage.cache_write_tokens != 0
+            and (usage.cache_write_tokens is None or usage.cache_write_1h_tokens is None)):
+        return None, "missing_usage"
     amount = (uncached * rates.input + read * (rates.cache_read or 0)
               + write * (rates.cache_write or 0) + usage.output_tokens * rates.output)
+    if rates.cache_write_1h is not None:
+        amount += write_1h * (rates.cache_write_1h - (rates.cache_write or 0))
     return amount / Decimal(1_000_000), "estimated"

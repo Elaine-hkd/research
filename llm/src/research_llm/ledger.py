@@ -12,6 +12,7 @@ _AUDIT_COLUMNS = {
     "user_id": "TEXT", "source": "TEXT", "source_status": "TEXT",
     "pricing_model": "TEXT", "metadata_json": "TEXT", "time_source": "TEXT",
     "pricing_period": "TEXT", "pricing_multiplier": "TEXT", "pricing_rule_json": "TEXT",
+    "cache_write_1h_tokens": "INTEGER",
 }
 
 
@@ -83,7 +84,7 @@ def store_call(path: Path, call: dict) -> dict:
         saved = dict(connection.execute("SELECT * FROM model_calls WHERE call_id = ?", (row["call_id"],)).fetchone())
         for name in ("project_id", "user_id", "source", "requested_model", "status", "source_status",
                      "input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
-                     "cache_write_tokens", "reasoning_tokens"):
+                     "cache_write_tokens", "cache_write_1h_tokens", "reasoning_tokens"):
             if name in row and saved[name] != row[name]:
                 raise ValueError(f"调用 {row['call_id']} 重复导入时 {name} 不一致")
         return saved
@@ -97,7 +98,8 @@ def finish_call(path: Path, call_id: str, *, status: str, details: dict) -> dict
     row = dict.fromkeys((
         "error_type", "response_id", "provider_request_id", "response_model", "input_tokens",
         "output_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens",
-        "reasoning_tokens", "estimated_cost",
+        "reasoning_tokens", "estimated_cost", "cache_write_1h_tokens",
+        "rates_per_million", "pricing_period", "pricing_multiplier",
     ))
     row.update(cost_status="unavailable")
     row.update(details)
@@ -109,6 +111,10 @@ def finish_call(path: Path, call_id: str, *, status: str, details: dict) -> dict
                 input_tokens = :input_tokens, output_tokens = :output_tokens,
                 total_tokens = :total_tokens, cache_read_tokens = :cache_read_tokens,
                 cache_write_tokens = :cache_write_tokens, reasoning_tokens = :reasoning_tokens,
+                cache_write_1h_tokens = :cache_write_1h_tokens,
+                rates_per_million = COALESCE(:rates_per_million, rates_per_million),
+                pricing_period = COALESCE(:pricing_period, pricing_period),
+                pricing_multiplier = COALESCE(:pricing_multiplier, pricing_multiplier),
                 estimated_cost = :estimated_cost, cost_status = :cost_status
             WHERE call_id = :call_id AND status = 'pending'
         """, dict(row, call_id=call_id, status=status, finished_at=utc_now()))
