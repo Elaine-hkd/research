@@ -28,3 +28,7 @@ config/dsh/sessions/
 !/data/gittaskbench/
 /data/gittaskbench/*
 !/data/gittaskbench/README.md
+# 技能是生成器的产物（纯文本，几 KB），属于实验交付物，随仓库一起入库。
+!/data/gittaskbench/skills/
+# 镜像定义是资源包的一部分：缺了它容器模式无法重建，体积只有几 KB。
+!/data/gittaskbench/environment/

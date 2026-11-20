@@ -1,0 +1,29 @@
+{
+  "repo": "PDFPlumber",
+  "commit": "df188a73013393d036442bfb0f323c4c995fa5e1",
+  "mode": "llm",
+  "model": "deepseek/deepseek-flash",
+  "generated_at": "2026-11-20T04:53:32+00:00",
+  "sources": [
+    {
+      "path": "README.md",
+      "sha256": "502861ded0fb91fe1016c49ed2ec5309f50366079db8f5b495cb6852a1f583ed"
+    },
+    {
+      "path": "docs/colors.md",
+      "sha256": "d866e00467c88c57336b0f5fccf5c8cf7cec7b535b10354333d5cd8a7571898c"
+    },
+    {
+      "path": "docs/repairing.md",
+      "sha256": "2454a29f85dc7f486266ff953b41a985ef6b627f186686ab6b61198c0a35a2f0"
+    },
+    {
+      "path": "docs/structure.md",
+      "sha256": "85a9cbe5fda34d7fcd5f01161b15434887fadd0a374fba400d16b904410f2ded"
+    }
+  ],
+  "modules_scanned": 12,
+  "symbols": 48,
+  "skill_sha256": "f4bb3649ada829d906eb2b342ea9ce3fffa82d4d2d4964c40a8d40b7bf8a47bb",
+  "skill_bytes": 2745
+}
