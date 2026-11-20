@@ -1,6 +1,7 @@
 """加载配置的候选任务，排除忽略项，并可选地在每次运行时抽样一次。"""
 
 from pathlib import Path
+import inspect
 import random
 
 from .config import load_function
@@ -43,7 +44,11 @@ def load_tasks(dataset: dict, *, retained_tasks: list[Task] | None = None,
         used_ids.update(task.id for task in retained_tasks)
 
     loader = load_function(dataset["loader"])
-    tasks = list(loader(Path(dataset["index"]), dataset.get("task_ids")))
+    # 只有声明了 sandbox 参数的加载器才需要它：指令里的路径描述随运行环境变化。
+    options = {}
+    if "sandbox" in inspect.signature(loader).parameters:
+        options["sandbox"] = dataset.get("sandbox", "local")
+    tasks = list(loader(Path(dataset["index"]), dataset.get("task_ids"), **options))
     candidates = [task for task in tasks if task.id not in excluded and task.id not in used_ids]
     if needed is None:
         if excluded and not candidates:

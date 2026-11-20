@@ -183,6 +183,23 @@ def _inject_worker_runtime(dockerfile: Path) -> None:
     dockerfile.write_text(rewritten, encoding="utf-8", newline="\n")
 
 
+def prepare_container_task(task_dir: str | Path) -> Path:
+    """给已生成的任务副本配置容器镜像：注入国内镜像源与框架运行时。
+
+    与 `materialize_skillsbench_task` 的后处理一致，但用于自带准备逻辑的适配器：
+    任务目录里必须已有 `environment/Dockerfile`。
+    """
+    directory = Path(task_dir)
+    for dockerfile in sorted((directory / "environment").rglob("Dockerfile*")):
+        if dockerfile.is_file():
+            _inject_package_mirrors(dockerfile)
+    main_dockerfile = directory / "environment" / "Dockerfile"
+    if not main_dockerfile.is_file():
+        raise FileNotFoundError(f"任务目录缺少容器镜像定义：{main_dockerfile}")
+    _inject_worker_runtime(main_dockerfile)
+    return directory
+
+
 def materialize_skillsbench_task(index_path: str | Path, task_id: str,
                                 destination: str | Path) -> Path:
     """将任务数据复制到新的持久准备目录，不修改原始数据。

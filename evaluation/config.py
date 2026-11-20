@@ -107,8 +107,15 @@ def load_config(*, dataset: Path, environment: Path, agent: Path,
     if isinstance(threshold, bool) or not isinstance(threshold, (float, int)) or not 0 <= threshold <= 1:
         raise ValueError("pass_threshold 必须在 [0, 1] 范围内")
     dataset = config["dataset"]
-    if extra := dataset.keys() - {"package", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup"}:
+    if extra := dataset.keys() - {"package", "task_ids", "exclude_task_ids", "sample_size", "seed", "loader", "prepare", "setup", "sandbox"}:
         raise ValueError(f"未知数据集配置项：{sorted(extra)}")
+    if "sandbox" in dataset:
+        if dataset["sandbox"] not in {"local", "docker"}:
+            raise ValueError("dataset.sandbox 只能是 local 或 docker")
+        # 指令里的路径描述由数据集生成，环境由工厂创建；两处不一致会让 agent 按错误的位置找文件。
+        if environment := config.get("environment"):
+            if environment.get("sandbox") not in (None, dataset["sandbox"]):
+                raise ValueError("dataset.sandbox 与 environment.sandbox 必须一致")
     package_path = dataset.get("package")
     if not isinstance(package_path, str) or not package_path.strip():
         raise ValueError("dataset.package 必须指定标准资源包目录")
