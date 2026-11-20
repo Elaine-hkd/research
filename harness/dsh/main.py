@@ -16,7 +16,7 @@ OUTPUT_ROOT = PROJECT_ROOT / "logs" / "harness" / "dsh"
 
 MODEL={
     "provider": "deepseek-official",
-    "model": "qwen3.8-max-0902",
+    "model": "deepseek/deepseek-flash",
     "base_url": "https://uniapi.thingo.com.cn/v1",
     "api_key_env": "THINGO_UNI_API_KEY",
     "max_tokens": 8192,

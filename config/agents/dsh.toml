@@ -1,9 +1,9 @@
 [model]
 # 保留原生 dsh 路由；配对比较时需确认服务端模型版本一致。
 provider = "deepseek-official"
-model = "qwen3.8-max-0902"
-base_url = "https://uniapi.thingo.com.cn/v1"
-api_key_env = "THINGO_UNI_API_KEY"
+model = "gpt-6-sol"
+base_url = "https://intlapi.thingo.com.cn/v1"
+api_key_env = "THINGO_INTL_API_KEY"
 # max_tokens = 8192
 # reasoning_effort = "high"
 
