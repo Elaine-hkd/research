@@ -6,7 +6,7 @@
 
 - 上游共 54 题，本包已接入 3 题：`PDFPlumber_01`、`PDFPlumber_02`、`PDFPlumber_03`（同一仓库 `PDFPlumber` 的全部题）
 - 任务格式：`research-gittaskbench-v1`
-- 只支持 `no-skill` 条件（GitTaskBench 没有技能维度）
+- 两种条件：`no-skill`（基线）与 `with-skill`（注入由本仓库生成的 `SKILL.md`）
 - 评分：直接运行上游的 `test_script.py`，以它写出的 JSONL 结论为准
 
 | 任务 | 要求 | 产物 | 上游判分 | 实测（`gpt-6-sol`，一次） |
@@ -30,6 +30,7 @@ data/gittaskbench/
 ├── assets/<任务ID>/                 # 输入素材，prepare 时复制为试验目录的 input/
 ├── groundtruth/<任务ID>/gt.*        # 真值，扩展名随题变化（txt / csv / md / 图片）
 ├── verifier/<任务ID>/test_script.py # 上游评分脚本，原样
+├── skills/<Repo>/                   # 生成器读仓库产出的技能（SKILL.md + provenance.json）
 └── code_base/<Repo>/                # 仓库快照，同仓库的题共用一份
 ```
 
@@ -56,9 +57,9 @@ data/gittaskbench/
 | 函数 | 行为 |
 |---|---|
 | `load_tasks` | 读 `index.json`，校验 `query`、`prompt`、`expected_output`；传 `task_ids` 时按传入顺序返回，重复 / 未知 / 非法 ID 直接报错 |
-| `prepare_task` | 复制 `assets_dir` → `input/`；复制 `code_base` → 任务目录同名路径；缺仓库或含符号链接直接失败 |
+| `prepare_task` | 复制 `assets_dir` → `input/`；复制 `code_base` → 任务目录同名路径；`with-skill` 时再把 `skills_dir` 复制成 `skills/<Repo>/` 并生成技能目录清单；缺仓库或含符号链接直接失败 |
 | `create_environment` | 本机 `LocalEnvironment`，工作目录为任务目录 |
-| `setup_environment` | 执行 `install` 命令（`pip install -e`），再校验 `import` 落点必须在仓库内 |
+| `setup_environment` | 执行 `install` 命令（`pip install -e`），再校验 `import` 落点必须在仓库内；同时核对技能「该有则有、不该有则无」 |
 | `evaluate` | 运行上游 `test_script.py`，解析 JSONL 最后一行判定 |
 
 ### 2.2 索引字段与读取阶段
@@ -72,6 +73,7 @@ data/gittaskbench/
 | `install` | setup | 命令列表，`{python}`、`{repo}` 会被替换成解释器与仓库绝对路径 |
 | `python_packages` | setup | 应来自仓库的模块名；有 `code_base` 时只校验落点，不从 PyPI 补装 |
 | `groundtruth`、`test_script` | evaluate | 真值与评分脚本，不进入 agent 环境 |
+| `skills_dir` | prepare | 生成器产出的技能目录，仅 `with-skill` 读取；声明它必须有 `code_base` |
 | `agent_timeout_sec` | load | agent 总预算，与环境配置的单条命令超时不是一回事 |
 | `task_info` | 不读取 | 上游元数据，`task_info.yaml` 里的路径与包内布局不同，以索引为准 |
 
@@ -87,11 +89,13 @@ data/gittaskbench/
 
 ### 2.4 硬校验（关键设计）
 
-两条约束保证「测的是仓库能力」而不是「调 PyPI 上的同名库」：
+三条约束保证「测的是仓库能力」而不是「调 PyPI 上的同名库」或「技能悄悄泄漏」：
 
 1. `prepare_task`：声明了 `code_base` 但目录缺失 → 直接失败；
 2. `setup_environment`：`install` 之后运行探针，检查 `python_packages` 里每个模块的 `__file__`
-   是否位于任务目录的仓库副本内 → 不在就判定 setup 失败。
+   是否位于任务目录的仓库副本内 → 不在就判定 setup 失败；
+3. 技能按条件双向校验：`with-skill` 要求 `skills_dir` 与清单都在场且每个文件存在，
+   `no-skill` 则要求任务目录里**没有** `skills/`、`skill_catalog` 为空 → 任一不满足即 setup 失败。
 
 因此 `reward=1.0` 的含义是：agent 在仓库副本存在、依赖来自仓库的前提下，产出了通过上游评分脚本的结果。
 
@@ -113,13 +117,90 @@ python verifier/<ID>/test_script.py \
 
 ### 2.6 与上游的差异
 
-| 项 | 上游 | 本包 |
+| 项 | 上游 | 本包（本机模式） | 本包（容器模式） |
+|---|---|---|---|
+| 执行环境 | Linux + conda | Windows + Git Bash | 共享镜像的 Linux 容器 |
+| 任务根目录 | `$REMOTE_REPO_PATH` 的父级 | 准备出来的任务目录 | `/task` |
+| 产物命名 | 只给 `output_dir`，由 agent 自己定文件名 | 索引固定 `expected_output`，指令里明确写出 | 同左 |
+| 仓库 | `code_base/` 与 `queries/` 同级 | 同样保持 `code_base/<Repo>`，只放已接入的仓库 | 同左 |
+| 技能条件 | 无 | `no-skill` / `with-skill` | 同左 |
+| prompt | 原样 | 原样保留，差异全部写在适配器追加段 | 同左 |
+
+容器模式与上游对齐的是**执行形态**：CPU、可联网、一个共享环境跑多题、评分脚本在环境内执行。
+上游用一份 conda 环境，这里用一份镜像；每个 trial 仍起独立容器，题目依赖由
+`install` / `python_packages` 在 setup 阶段装进容器，镜像本身不预装任务库。
+
+#### 容器模式怎么跑
+
+```bash
+python -m evaluation \
+  --dataset     config/datasets/gittaskbench-docker.toml \
+  --environment config/environments/gittaskbench-docker.toml \
+  --agent       config/agents/dsh-code.toml \
+  --evaluation  config/evaluation/gittaskbench.toml \
+  --name        gtb-docker-<实验名>
+```
+
+两处 `sandbox = "docker"` 必须同时写：`dataset.sandbox` 决定指令按哪种环境描述
+（`/task` 还是任务目录），`environment.sandbox` 决定工厂建哪种环境。
+两者不一致时，配置加载和 `setup` 阶段各有一道硬校验，不会跑出「指令说相对路径、
+实际在容器里找不到」的脏结果。
+
+镜像与路由：
+
+| 环节 | 落点 |
+|---|---|
+| Dockerfile | `environment/Dockerfile`（包内一份，题目共用） |
+| 构建上下文 | 准备出来的任务目录；`prepare_task` 会复制 Dockerfile 并注入 pip/apt 镜像源与框架 worker 运行时 |
+| 任务文件 | 容器起来后整体 `docker cp` 到 `/task`（benchflow 的 `upload_dir` 顺带把 `.sh`/`.py` 的 CRLF 修成 LF） |
+| 评分材料 | agent 结束后才复制到 `/task/.evaluation/`，运行期间不在容器里 |
+| 产物 | 评分后从容器取回宿主任务目录，两种模式的目录布局一致 |
+
+`benchflow` 的 `upload_file` 用宿主 `Path` 解析容器路径，在 Windows 上会把
+`/task/.evaluation` 拼成反斜杠目录名，所以评分目录由适配器先 `mkdir -p` 建好再上传。
+这道绕过只影响复制动作，不改变容器内布局。
+
+实测（三题同批，`gpt-6-sol`，无技能）：01 / 02 / 03 分别 1.0 / 0.0 / 1.0，与本机模式完全一致
+（02 的 0 分是已知的上游真值缺陷，见第 8 节）。镜像已缓存时 environment 阶段 5.8–7.0 s、
+setup 16.5–19.9 s（含 19 MB 任务目录复制与 `pip install -e`）、agent 55–149 s、评分 6.1–6.9 s；
+`PDFPlumber_01` 的 `similarity` 为 100.00%，`import pdfplumber` 落到 `/task/code_base/PDFPlumber/pdfplumber`。
+首次构建镜像约 124 s，改 Dockerfile 后重建约 139 s，之后每个 trial 只付启动成本。
+
+
+
+### 2.7 技能从哪来（生成器）
+
+`datasets/skillgen.py` 只读 `code_base/<Repo>`，产出 `skills/<Repo>/SKILL.md`：
+
+```bash
+python -m datasets.skillgen \
+  --repo data/gittaskbench/code_base/PDFPlumber \
+  --out  data/gittaskbench/skills/PDFPlumber \
+  --commit df188a73013393d036442bfb0f323c4c995fa5e1
+```
+
+- **材料**：`README.md`、`docs/*.md`（最多 3 篇）、示例文件清单、公开 API 摘要（AST 抽 12 个模块、60 个符号）。
+- **不读** `groundtruth/` 与 `test_script/`：生成器拿不到答案，技能才不是抄答案。
+- **两种模式**：`--mode llm`（默认，把材料交给模型写操作说明）与 `--mode template`（离线确定性骨架，
+  用于跑通链路或做对照）。
+- **产物校验**（不过就报错，不写半成品）：YAML 前置元数据可解析、正文 ≥300 字、不含评分材料相关字样、
+  不含本机绝对路径、**不得出现 `pip install <包名>`**——README 里常写这句，照抄会让 agent 用 PyPI 包覆盖仓库。
+- **`provenance.json`**：记录仓库名、commit、模式、模型、源文件 sha256、技能 sha256，便于复算。
+
+`with-skill` 时技能如何送达：`prepare_task` 把技能复制成任务目录下的 `skills/<Repo>/SKILL.md`，
+harness 把这个目录清单（name / description / path）追加到 prompt 末尾，path 是相对任务根目录的路径，
+agent 用 `read_file` 直接读。
+
+### 2.8 校准集与留出集
+
+同一仓库有 3 个实例，按「技能可在部分实例上迭代、另一部分只测一次」拆开：
+
+| 配置 | 任务 | 用途 |
 |---|---|---|
-| 执行环境 | Linux 容器 / conda | 本机 Windows + Git Bash，不走 Docker |
-| 产物命名 | 只给 `output_dir`，由 agent 自己定文件名 | 索引固定 `expected_output`，指令里明确写出 |
-| 仓库 | `code_base/` 与 `queries/` 同级 | 同样保持 `code_base/<Repo>`，只放已接入的仓库 |
-| 技能条件 | 无 | 仅 `no-skill` |
-| prompt | 原样 | 原样保留，差异全部写在适配器追加段 |
+| `config/datasets/gittaskbench-tune.toml` | `01`、`02` | 校准：技能可以反复改，改完重跑 |
+| `config/datasets/gittaskbench-holdout.toml` | `03` | 留出：技能定稿后只跑一次，**不允许据其结果再改技能** |
+
+留出集只有 1 个实例，单次结论方差大；要看稳定性就重复跑，或等接入 `SpeechBrain`（5 题）这类多实例仓库。
 
 ---
 
@@ -144,6 +225,23 @@ uv run python -X utf8 -m evaluation `
 
 # 只跑指定任务（`--task` 覆盖 dataset.task_ids）
 uv run python -X utf8 -m evaluation ... --name "gtb-pdf02" --task PDFPlumber_02
+```
+
+技能增益对照：把 `--dataset` 换成校准集或留出集，`--evaluation` 换成同时跑两种条件的配置。
+
+```powershell
+# 校准集：01 + 02，各跑 no-skill 与 with-skill（4 条 trial）
+uv run python -X utf8 -m evaluation `
+  --dataset config\datasets\gittaskbench-tune.toml `
+  --environment config\environments\gittaskbench.toml `
+  --agent config\agents\dsh-code.toml `
+  --evaluation config\evaluation\gittaskbench-skill.toml `
+  --name "gtb-skill-tune"
+
+# 留出集：技能定稿后只跑一次
+uv run python -X utf8 -m evaluation ... `
+  --dataset config\datasets\gittaskbench-holdout.toml `
+  --name "gtb-skill-holdout"
 ```
 
 结果在 `logs/exp/gittaskbench/<harness>/<模型>/<实验名>/`：`summary.json` 是聚合，`results.jsonl`
@@ -178,7 +276,7 @@ git checkout FETCH_HEAD
 cp -r code_base/<Repo> <research>/data/gittaskbench/code_base/
 ```
 
-### 第 2 步：落位五类文件
+### 第 2 步：落位六类文件
 
 ```bash
 cd /tmp/gtb
@@ -200,7 +298,22 @@ cp groundtruth/$T/gt.*                      $R/groundtruth/$T/
 - 输入素材在 `query.json` 里是容器绝对路径，适配器会按 basename 改写成 `input/<文件名>`；
   一题多个输入且同名时会静默错配，这类题要先改名。
 
-### 第 3 步：索引加一行
+### 第 3 步：生成技能（新仓库才需要）
+
+仓库落位后，用生成器读它产出技能；同一仓库的后续题直接复用这份技能，不需要重跑。
+
+```bash
+cd <research>
+python -m datasets.skillgen \
+  --repo data/gittaskbench/code_base/<Repo> \
+  --out  data/gittaskbench/skills/<Repo> \
+  --commit <上游 commit>
+```
+
+生成失败（校验不过）时会直接报错，不会留下半成品。若换了 commit 或补了文档，重跑一次即可，
+新旧差异可用 `provenance.json` 里的 `skill_sha256` 比对。
+
+### 第 4 步：索引加一行
 
 在 `index.json` 的 `tasks` 里追加，并把 `task_count` 加 1：
 
@@ -215,6 +328,7 @@ cp groundtruth/$T/gt.*                      $R/groundtruth/$T/
   "test_script": "verifier/PDFPlumber_02/test_script.py",
   "code_base": "code_base/PDFPlumber",
   "install": ["{python} -m pip install --disable-pip-version-check -e {repo}"],
+  "skills_dir": "skills/PDFPlumber",
   "expected_output": "output/PDFPlumber_02/output.csv",
   "python_packages": ["pdfplumber"],
   "agent_timeout_sec": 1800
@@ -224,18 +338,19 @@ cp groundtruth/$T/gt.*                      $R/groundtruth/$T/
 字段取值规则：
 
 - `expected_output`：上游只给 `output_dir`，**文件名由这里定**，适配器会把它写进指令并在评分时按它取产物；
+- `skills_dir`：指向该仓库的技能目录；声明了就自动支持 `with-skill`，不声明则只能跑 `no-skill`；
 - `install`：能 `pip install -e` 的仓库用上面这条；不可安装的脚本型仓库改成
   `["{python} -m pip install -r {repo}/requirements.txt"]` 或留空；
 - `python_packages`：只填「应当由仓库提供、且要被 import」的模块，写 import 名（`Pillow` 要写 `PIL`）；
   脚本型仓库留空，此时不做落点校验，仓库仍通过 `read_file` / `terminal` 使用；
 - `agent_timeout_sec`：视频 / 大模型类任务建议调大，默认 1800。
 
-### 第 4 步：预览并单题实跑
+### 第 5 步：预览并单题实跑
 
 先 `--plan --task <任务ID>` 看 `planned_trials: 1`，再去掉 `--plan` 实跑。新题建议用独立实验名：
 混跑会让 `manifest` 的任务列表变化，和旧结果对比不直观。
 
-### 第 5 步：验收清单
+### 第 6 步：验收清单
 
 一条接入正确的 trial 应该同时满足：
 
@@ -243,7 +358,10 @@ cp groundtruth/$T/gt.*                      $R/groundtruth/$T/
 2. trace 里出现 `read_file .../code_base/<Repo>/README.md`；
 3. trace 里**没有** `pip install <同名包>`；
 4. `verifier/result.json` 的 `verdict` 来自上游脚本，`Process` / `Result` 有明确值；
-5. `metrics.prediction_bytes > 0`，且 `similarity`（若脚本输出）与真值量级相符。
+5. `metrics.prediction_bytes > 0`，且 `similarity`（若脚本输出）与真值量级相符；
+6. **`with-skill` 额外看两条**：`metrics.skill_catalog` 非空，且 `metrics.skill_files_read`
+   里出现 `skills/<Repo>/SKILL.md`——没读到就说明技能没被用上，这次的增益不成立；
+7. `no-skill` 的 `metrics.skill_catalog` 必须为空（适配器在 setup 阶段已强制，出现即配置错误）。
 
 若第 2 条不满足，先看指令是否被截断、仓库是否真的复制进任务目录；若第 3 条不满足，说明 `install`
 没生效或 `python_packages` 写错，检查 `setup` 的 stderr。
@@ -264,9 +382,13 @@ cp groundtruth/$T/gt.*                      $R/groundtruth/$T/
   在 Windows 上 import 失败，需 Linux 机器）。
 - **外网型任务**：`Trafilatura` 这类要现场抓网页的题，失败率主要来自网络而不是模型，结果要单独看。
 - **运行期覆盖**：`setup` 只在开跑前校验 import 落点，agent 中途自行 `pip install` 同名包不会被拦。
-- **版本控制**：`.gitignore` 忽略 `/data/*`，本包中**只有这份 README 入库**（`.gitignore` 里为它开了
-  单独例外），19 MB 仓库快照、`index.json`、`dataset.json` 与各题文件都需要按第 6 节重建；
-  `datasets/gittaskbench.py` 与 2 节列出的四份配置是正常跟踪的文件。
+- **版本控制**：`.gitignore` 忽略 `/data/*`，本包只有**这份 README 与 `skills/` 入库**（两处单独例外），
+  19 MB 仓库快照、`index.json`、`dataset.json` 与各题文件都需要按第 6 节重建；
+  `datasets/gittaskbench.py`、`datasets/skillgen.py` 与 2 节列出的四份配置是正常跟踪的文件。
+- **技能覆盖面有限**：生成器只读 README、`docs/` 前 3 篇与公开 API 摘要，不读 `tests/`；
+  文档写得薄的仓库，产出的技能会很单薄，这时要么补文档、要么换材料源（例如把 README 的示例段单独提出来）。
+- **技能不是答案**：技能只描述「怎么用仓库」，不含任何真值或评分信息；若发现技能里出现
+  `groundtruth`、`test_script` 字样，说明生成链路被污染，必须重生成而不是手改。
 
 ---
 
