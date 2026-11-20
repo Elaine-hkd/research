@@ -4,7 +4,7 @@
     {
       "id": "send-introduction-email",
       "task_file": "tasks/send-introduction-email.toml",
-      "skills_dir": "skills"
+      "skills_dir": "skills/rpa_email"
     }
   ]
 }

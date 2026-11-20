@@ -1,6 +1,6 @@
 [task]
 id = "send-introduction-email"
-receiver = "lornd@qq.com"
+receiver = "3194607378@qq.com"
 subject = "Agent 实验：自我介绍"
 timeout_sec = 900
 instruction = """
