@@ -24,6 +24,13 @@ CONTAINER_ROOT = "/task"
 EVALUATION_DIR = "/task/.evaluation"
 SANDBOXES = ("local", "docker")
 
+# 上游 54 个评分脚本里，48 个接受同样的三个参数，6 个不同：
+# AnimeGANv3_03 用 -i/-o，另有 5 题不吃 --groundtruth（本身无真值）。
+# 因此参数按题声明，未声明时用主形态，保证已接入的题行为不变。
+VERIFIER_PLACEHOLDERS = ("output", "output_dir", "input_dir", "groundtruth", "result")
+DEFAULT_VERIFIER_ARGS = ["--output", "{output}", "--groundtruth", "{groundtruth}",
+                         "--result", "{result}"]
+
 # 校验「import 到的模块来自仓库」，避免 PyPI 上的同名包把仓库架空。
 _REPO_IMPORT_PROBE = """\
 import importlib, pathlib, sys
@@ -159,6 +166,48 @@ def _instruction(prompt: str, task_id: str, description: str,
     return "\n".join(lines)
 
 
+def _verifier_args(row: dict, package, expected: str, task_id: str) -> list[str]:
+    """读取并校验评分脚本的参数模板；未声明时用上游主形态。
+
+    校验只在加载期做，避免把「模板写错」拖到评分阶段，那时报出来会像任务失败。
+    """
+    declared = row.get("verifier_args")
+    if declared is None:
+        declared = list(DEFAULT_VERIFIER_ARGS)
+    if not isinstance(declared, list) or not declared:
+        raise ValueError(f"verifier_args 必须为非空字符串列表：{task_id}")
+    if any(not isinstance(item, str) or not item.strip() for item in declared):
+        raise ValueError(f"verifier_args 只能包含非空字符串：{task_id}")
+
+    names = {name for item in declared for name in re.findall(r"\{([^{}]+)\}", item)}
+    unknown = sorted(names - set(VERIFIER_PLACEHOLDERS))
+    if unknown:
+        raise ValueError(
+            f"verifier_args 含未知占位符 {unknown}，可用 {list(VERIFIER_PLACEHOLDERS)}：{task_id}")
+    if "result" not in names:
+        raise ValueError(f"verifier_args 必须包含 {{result}}，否则读不到评分结论：{task_id}")
+    if not names & {"output", "output_dir"}:
+        raise ValueError(f"verifier_args 必须包含 {{output}} 或 {{output_dir}}：{task_id}")
+    if "groundtruth" in names:
+        if not row.get("groundtruth"):
+            raise ValueError(f"verifier_args 用了 {{groundtruth}} 但该题没有声明真值：{task_id}")
+        try:
+            truth = resource_path(package.root, _resource(row["groundtruth"], "真值路径"))
+        except (FileNotFoundError, ValueError) as error:
+            # 把路径错误包成配置错误，否则堆栈里只剩「文件不存在」，看不出是模板声明的。
+            raise ValueError(
+                f"verifier_args 用了 {{groundtruth}} 但真值不可用：{row['groundtruth']}（{error}）"
+                f"：{task_id}") from error
+        if not truth.is_file():
+            raise ValueError(f"verifier_args 用了 {{groundtruth}} 但真值不是文件：{truth}：{task_id}")
+    if "output_dir" in names and "output" not in names:
+        # 只用目录时必须以目录形式取回产物；要求它有独立子目录，
+        # 否则会把整个任务根目录（含 code_base）拷回宿主。
+        if PurePosixPath(expected).parent.as_posix() == ".":
+            raise ValueError(f"只用 {{output_dir}} 时 expected_output 必须位于子目录下：{task_id}")
+    return list(declared)
+
+
 def _load_task(package, index: Path, row: dict, sandbox: str = "local") -> Task:
     task_id = _identifier(row.get("id"), "任务 ID")
     query_path = resource_path(package.root, _resource(row.get("query"), "query 路径"))
@@ -212,6 +261,8 @@ def _load_task(package, index: Path, row: dict, sandbox: str = "local") -> Task:
         if not code_base:
             raise ValueError(f"声明了 skills_dir 但没有 code_base，技能缺少来源仓库：{task_id}")
 
+    verifier_args = _verifier_args(row, package, expected, task_id)
+
     return Task(
         id=task_id,
         instruction=_instruction(prompt, task_id, description, inputs, expected,
@@ -225,6 +276,8 @@ def _load_task(package, index: Path, row: dict, sandbox: str = "local") -> Task:
             "code_base": code_base,
             "install": list(install),
             "skills_dir": skills_dir,
+            # 评分脚本的参数模板：占位符在 evaluate 里替换，不再写死三个参数。
+            "verifier_args": verifier_args,
             # 记录指令按哪种运行环境生成；setup 阶段会与环境实际形态比对，不一致直接失败。
             "sandbox": sandbox,
         },
@@ -566,21 +619,47 @@ def _skill_usage(output_dir: Path) -> tuple[int, list[str]]:
     return calls, files
 
 
+def _fill_args(template: list[str], values: dict[str, str]) -> list[str]:
+    """替换参数模板里的占位符；只替换已知的五个，其余花括号原样保留。"""
+    def replace(item: str) -> str:
+        return re.sub(r"\{([^{}]+)\}",
+                      lambda match: values[match.group(1)]
+                      if match.group(1) in values else match.group(0), item)
+
+    return [replace(item) for item in template]
+
+
+def _parent_of(path: str, container: bool) -> str:
+    """取父目录；容器内固定 POSIX，本机交给 Path 处理盘符与反斜杠。"""
+    return PurePosixPath(path).parent.as_posix() if container else str(Path(path).parent)
+
+
 async def evaluate(context: TrialContext, agent: AgentResult) -> Score:
-    """在任务环境内运行上游 test_script，以其 JSONL 结论判定是否通过。"""
+    """在任务环境内运行上游 test_script，以其 JSONL 结论判定是否通过。
+
+    参数由索引的 `verifier_args` 模板决定：上游 48/54 题是 `--output/--groundtruth/--result`，
+    其余用了不同参数名或不带真值，写死三个参数会在这些题上直接 argparse 失败。
+    """
     row = context.task.source["row"]
     package = read_package_index(Path(context.task.source["index"]), task_format=TASK_FORMAT)
-    groundtruth = resource_path(package.root, _resource(row.get("groundtruth"), "真值路径")).resolve()
+    template = context.task.metadata["verifier_args"]
+    uses_truth = any("{groundtruth}" in item for item in template)
+
     script = resource_path(package.root, _resource(row.get("test_script"), "评分脚本路径")).resolve()
-    for path, name in ((groundtruth, "真值"), (script, "评分脚本")):
-        if not path.is_file():
-            raise FileNotFoundError(f"{name}文件缺失：{path}")
+    if not script.is_file():
+        raise FileNotFoundError(f"评分脚本文件缺失：{script}")
+    truth: Path | None = None
+    if uses_truth:
+        truth = resource_path(package.root, _resource(row.get("groundtruth"), "真值路径")).resolve()
+        if not truth.is_file():
+            raise FileNotFoundError(f"真值文件缺失：{truth}")
 
     container = _container(context.environment)
     expected = context.task.metadata["expected_output"]
     task_dir = context.prepared.task_dir.resolve()
-    # 评分脚本以任务根目录为 cwd 运行，所有路径先解析成绝对路径，避免相对路径被二次拼接。
-    prediction = _path(context, expected)
+    local_output = task_dir / PurePosixPath(expected)
+    # 模板只给目录时按目录取回产物；给了单文件路径就按文件取回。
+    output_mode = "file" if any("{output}" in item for item in template) else "directory"
     result_file = context.output_dir.resolve() / "verifier" / "results.jsonl"
     result_file.parent.mkdir(parents=True, exist_ok=True)
     result_file.unlink(missing_ok=True)
@@ -593,30 +672,48 @@ async def evaluate(context: TrialContext, agent: AgentResult) -> Score:
             ["mkdir", "-p", EVALUATION_DIR], timeout=60)
         if not made.success:
             raise RuntimeError(f"无法创建评分目录：{made.stderr.strip()[-500:]}")
-        gt_name = f"groundtruth{groundtruth.suffix}"
         await context.environment.upload(script, f"{EVALUATION_DIR}/test_script.py")
-        await context.environment.upload(groundtruth, f"{EVALUATION_DIR}/{gt_name}")
-        script_arg, gt_arg = f"{EVALUATION_DIR}/test_script.py", f"{EVALUATION_DIR}/{gt_name}"
+        script_arg = f"{EVALUATION_DIR}/test_script.py"
+        truth_arg: str | None = None
+        if truth is not None:
+            truth_arg = f"{EVALUATION_DIR}/groundtruth{truth.suffix}"
+            await context.environment.upload(truth, truth_arg)
         result_arg = f"{EVALUATION_DIR}/results.jsonl"
+        output_arg = _path(context, expected)
+        input_arg = f"{CONTAINER_ROOT}/input"
     else:
-        script_arg, gt_arg, result_arg = str(script), str(groundtruth), str(result_file)
+        script_arg = str(script)
+        truth_arg = str(truth) if truth is not None else None
+        result_arg = str(result_file)
+        output_arg = str(local_output)
+        input_arg = str(task_dir / "input")
 
+    # 评分脚本以任务根目录为 cwd 运行，所有路径先解析成绝对路径，避免相对路径被二次拼接。
+    values = {
+        "output": output_arg,
+        "output_dir": _parent_of(output_arg, container),
+        "input_dir": input_arg,
+        "groundtruth": truth_arg or "",
+        "result": result_arg,
+    }
+    arguments = _fill_args(template, values)
     python = _python(context)
-    run = await context.environment.execute(
-        [python, script_arg, "--output", prediction,
-         "--groundtruth", gt_arg, "--result", result_arg],
-        cwd=_root(context), timeout=600,
-    )
+    run = await context.environment.execute([python, script_arg, *arguments],
+                                            cwd=_root(context), timeout=600)
     stdout = run.stdout or ""
 
     if container:
         if await _container_test(context, "-f", result_arg):
             await context.environment.download(result_arg, result_file)
-        # 产物也取回宿主，既便于复核，也让两种模式的目录布局保持一致。
-        if await _container_test(context, "-f", prediction):
-            local_prediction = task_dir / PurePosixPath(expected)
-            local_prediction.parent.mkdir(parents=True, exist_ok=True)
-            await context.environment.download(prediction, local_prediction)
+        # 产物取回宿主，既便于复核，也让两种模式的目录布局保持一致。
+        if output_mode == "file":
+            if await _container_test(context, "-f", output_arg):
+                local_output.parent.mkdir(parents=True, exist_ok=True)
+                await context.environment.download(output_arg, local_output)
+        elif await _container_test(context, "-d", values["output_dir"]):
+            local_output.parent.mkdir(parents=True, exist_ok=True)
+            await context.environment.download(values["output_dir"], local_output.parent,
+                                               directory=True)
 
     rows = []
     if result_file.exists():
@@ -631,7 +728,11 @@ async def evaluate(context: TrialContext, agent: AgentResult) -> Score:
     if match:
         similarity = float(match.group(1))
 
-    local_prediction = task_dir / PurePosixPath(expected)
+    if output_mode == "file":
+        produced = [local_output] if local_output.is_file() else []
+    else:
+        base = local_output.parent
+        produced = [item for item in base.rglob("*") if item.is_file()] if base.is_dir() else []
     passed = process and result and not run.timed_out and run.exit_code == 0
     skill_calls, skill_files = _skill_usage(context.output_dir)
     metrics = {
@@ -639,11 +740,15 @@ async def evaluate(context: TrialContext, agent: AgentResult) -> Score:
         "sandbox": "docker" if container else "local",
         "process": process,
         "result": result,
-        "prediction_exists": local_prediction.is_file(),
-        "prediction_bytes": local_prediction.stat().st_size if local_prediction.is_file() else 0,
+        "output_mode": output_mode,
+        "output_files": len(produced),
+        "prediction_exists": bool(produced),
+        "prediction_bytes": sum(item.stat().st_size for item in produced),
+        "uses_groundtruth": uses_truth,
         "similarity": similarity,
         "exit_code": run.exit_code,
         "timed_out": bool(run.timed_out),
+        "verifier_argv": [Path(script_arg).name, *arguments],
         "comments": verdict.get("comments", "") if isinstance(verdict, dict) else "",
         # 技能只在 with-skill 条件出现；这两个字段用于核对「技能是否真被使用」。
         "skill_catalog": [item["name"] for item in context.prepared.skill_catalog],
