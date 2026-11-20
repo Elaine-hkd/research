@@ -1,0 +1,10 @@
+# 技能增益对照：同一批任务各跑一次 no-skill 与 with-skill。
+# 两者共用同一条评分链路（上游 test_script.py），唯一变量是有没有注入
+# 由生成器读同一份仓库产出的 SKILL.md。
+output_dir = "../../logs/exp"
+conditions = ["no-skill", "with-skill"]
+repeats = 1
+pass_threshold = 1.0
+
+[evaluator]
+function = "datasets.gittaskbench:evaluate"

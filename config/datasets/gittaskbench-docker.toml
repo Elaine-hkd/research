@@ -1,0 +1,14 @@
+[dataset]
+# 路径相对此文件，不相对实验入口或执行目录。
+package = "../../data/gittaskbench"
+
+# 容器模式的同一批题。指令里的路径描述会换成 Linux 容器语境（任务根目录 /task），
+# 与 environment.sandbox 必须一致，否则配置加载时就报错。
+task_ids = ["PDFPlumber_01", "PDFPlumber_02", "PDFPlumber_03"]
+
+# 上游评测在 Linux 下运行；本机是 Windows，用容器对齐后 apt/系统库/行尾差异不再出现。
+sandbox = "docker"
+
+loader = "datasets.gittaskbench:load_tasks"
+prepare = "datasets.gittaskbench:prepare_task"
+setup = "datasets.gittaskbench:setup_environment"

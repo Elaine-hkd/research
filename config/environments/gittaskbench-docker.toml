@@ -1,0 +1,7 @@
+# 与上游一致的执行形态：CPU、可联网、共享一个基础镜像，每个 trial 起独立容器。
+# 题目依赖由索引里的 install / python_packages 在 setup 阶段装进容器，
+# 镜像本身不预装任何任务库，避免任务退化成「调 PyPI 上的包」。
+[environment]
+factory = "datasets.gittaskbench:create_environment"
+sandbox = "docker"
+default_timeout = 600
