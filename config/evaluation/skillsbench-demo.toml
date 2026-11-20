@@ -1,0 +1,10 @@
+# 首次试跑用一次重复，其余字段与共用的 skillsbench.toml 保持一致。
+output_dir = "../../logs/exp"
+
+conditions = ["with-skill"]
+repeats = 1
+
+pass_threshold = 1.0
+
+[evaluator]
+function = "datasets.skillsbench:evaluate"

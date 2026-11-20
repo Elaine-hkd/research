@@ -1,0 +1,10 @@
+# 稳定性验证：每个任务跑 1 次，看通过率与失败模式。
+output_dir = "../../logs/exp"
+
+conditions = ["with-skill"]
+repeats = 1
+
+pass_threshold = 1.0
+
+[evaluator]
+function = "datasets.skillsbench:evaluate"
