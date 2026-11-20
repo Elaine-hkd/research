@@ -1,0 +1,8 @@
+# GitTaskBench 的仓库级任务在本机执行：素材已随资源包落盘，评分脚本直接读本机路径。
+# 需要容器隔离时把 factory 换成 DockerEnvironment 版本，数据集实现无需改动。
+[environment]
+factory = "datasets.gittaskbench:create_environment"
+default_timeout = 600
+# Windows 的 PATH 里 bash 实际指向 WSL 启动器，未启用 WSL 时每条命令都会失败。
+# 显式指定 Git Bash（安装路径随机器不同，换机器时改这一行）。
+bash_executable = "C:/Program Files/Git/bin/bash.exe"

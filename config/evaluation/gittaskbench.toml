@@ -1,0 +1,8 @@
+# 资源包内的任务没有技能维度，只跑无技能条件；单次试验即可判定是否通过。
+output_dir = "../../logs/exp"
+conditions = ["no-skill"]
+repeats = 1
+pass_threshold = 1.0
+
+[evaluator]
+function = "datasets.gittaskbench:evaluate"

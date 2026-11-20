@@ -1,0 +1,17 @@
+# 仓库级代码任务不涉及技能注册中心，只暴露终端与文件工具。
+[model]
+provider = "deepseek-official"
+model = "gpt-6-sol"
+# dsh 在 base_url 后自行拼接 /chat/completions，因此这里必须带 /v1 后缀。
+base_url = "https://intlapi.thingo.com.cn/v1"
+api_key_env = "THINGO_INTL_API_KEY"
+
+[agent]
+runner = "harness.dsh.runner:execute"
+recorder = "agent_session_analyzer:DshRecorder"
+cost_tracking = true
+profile = "sdk-minimal"
+tool_timeout_sec = 300
+max_output_chars = 20000
+# 任务只读写本机任务目录，不需要 search_skills 等注册中心工具。
+tools = ["terminal", "read_file", "write_file"]

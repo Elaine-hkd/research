@@ -1,0 +1,10 @@
+[dataset]
+# 路径相对此文件，不相对实验入口或执行目录。
+package = "../../data/gittaskbench"
+
+# 不设置 task_ids 时使用索引中的全部任务；资源包目前只接入 PDFPlumber_01。
+# task_ids = ["PDFPlumber_01"]
+
+loader = "datasets.gittaskbench:load_tasks"
+prepare = "datasets.gittaskbench:prepare_task"
+setup = "datasets.gittaskbench:setup_environment"
