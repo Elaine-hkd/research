@@ -23,3 +23,8 @@ config/dsh/sessions/
 
 /data/*
 !/data/email-demo/
+# GitTaskBench 资源包体积大（含 19 MB 仓库快照），只入库包内 README，
+# 说明如何重建资源包；其余文件仍按上面的规则忽略。
+!/data/gittaskbench/
+/data/gittaskbench/*
+!/data/gittaskbench/README.md
