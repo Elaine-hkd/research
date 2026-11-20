@@ -122,8 +122,10 @@ class EnvironmentOperations:
                 )
                 raw = result.to_dict()
             else:
+                # 沿用环境配置的 shell：Windows 默认的 bash 是 WSL 启动器，直接调用会失败。
                 result = await self.environment.execute(
-                    ["bash", "-c", command], cwd=cwd, timeout=timeout,
+                    [self.environment.executor.bash_executable, "-c", command],
+                    cwd=cwd, timeout=timeout,
                 )
                 raw = asdict(result)
             if result.timed_out:
