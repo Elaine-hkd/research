@@ -72,7 +72,8 @@ data/gittaskbench/
 | `code_base` | prepare / setup | 包内仓库路径，复制到任务目录 |
 | `install` | setup | 命令列表，`{python}`、`{repo}` 会被替换成解释器与仓库绝对路径 |
 | `python_packages` | setup | 应来自仓库的模块名；有 `code_base` 时只校验落点，不从 PyPI 补装 |
-| `groundtruth`、`test_script` | evaluate | 真值与评分脚本，不进入 agent 环境 |
+| `groundtruth`、`test_script` | evaluate | 真值与评分脚本，不进入 agent 环境；真值仅在模板用到 `{groundtruth}` 时必需 |
+| `verifier_args` | load / evaluate | 评分脚本参数模板，可选；加载期校验占位符，未声明时用默认三参数 |
 | `skills_dir` | prepare | 生成器产出的技能目录，仅 `with-skill` 读取；声明它必须有 `code_base` |
 | `agent_timeout_sec` | load | agent 总预算，与环境配置的单条命令超时不是一回事 |
 | `task_info` | 不读取 | 上游元数据，`task_info.yaml` 里的路径与包内布局不同，以索引为准 |
@@ -101,7 +102,7 @@ data/gittaskbench/
 
 ### 2.5 评分口径
 
-`evaluate` 以任务目录为 cwd 执行：
+`evaluate` 以任务根目录为 cwd，按索引里的 `verifier_args` 模板拼命令行：
 
 ```
 python verifier/<ID>/test_script.py \
@@ -110,10 +111,40 @@ python verifier/<ID>/test_script.py \
   --result <试验目录>/verifier/results.jsonl
 ```
 
+上面是**默认模板**，未声明 `verifier_args` 时使用。可用占位符五个：
+
+| 占位符 | 含义 |
+|---|---|
+| `{output}` | `expected_output` 的绝对路径（任务根目录下） |
+| `{output_dir}` | 上一条的父目录 |
+| `{input_dir}` | 任务目录下的 `input/` |
+| `{groundtruth}` | 真值文件，仅该题真值可用时才能出现 |
+| `{result}` | 评分脚本写 JSONL 的位置，**必需** |
+
 规则：JSONL 取最后一行，`Process` 与 `Result` 同时为真、未超时、退出码为 0 → `reward=1`。
-`metrics` 保留 `process`、`result`、`prediction_exists`、`prediction_bytes`、`similarity`（从 stdout
-正则提取，仅文本相似度类任务有）、`exit_code`、`timed_out`、`comments`。
-上游 54 题的评分脚本都接受这三个参数（已抽查 `AnimeGANv3_01`），评分侧不需要按题改写。
+
+**上游参数并不统一。** 54 个评分脚本里 48 个是上面这三参数，6 个例外：
+
+- `AnimeGANv3_03` 用 `-i`（输入目录）/ `-o`（输出目录）加 `--ssim_threshold`、`--fid_threshold`，
+  既没有 `--output` 也没有 `--groundtruth`；
+- `Faker_01`、`Faker_02`、`DeOldify_03`、`DeScratch_01`、`VideoPose3D_01` 不吃 `--groundtruth`
+  （前两题有真值但不参与判分，后三题没有真值，走无参考指标）。
+
+所以参数按题声明，例如：
+
+```json
+"verifier_args": ["-i", "{input_dir}", "-o", "{output_dir}", "--result", "{result}",
+                  "--ssim_threshold", "0.8", "--fid_threshold", "50"]
+```
+
+阈值写进索引而不是代码：跟着题走、可 diff、可追溯。加载期会做五项校验——占位符必须在上面五个之内、
+必须含 `{result}`、必须含 `{output}` 或 `{output_dir}`、用了 `{groundtruth}` 就必须真有真值文件、
+只用 `{output_dir}` 时 `expected_output` 必须在子目录下（否则会把整个任务根目录连同 `code_base`
+拷回宿主）。全部在 `load_tasks` 阶段失败，不拖到评分阶段。
+
+`metrics` 保留 `process`、`result`、`prediction_exists`、`prediction_bytes`、`similarity`、
+`exit_code`、`timed_out`、`comments`，新增 `output_mode`（`file` / `directory`）、`output_files`、
+`uses_groundtruth` 与 `verifier_argv`（实际执行的参数，便于复核）。
 
 ### 2.6 与上游的差异
 
@@ -338,6 +369,8 @@ python -m datasets.skillgen \
 字段取值规则：
 
 - `expected_output`：上游只给 `output_dir`，**文件名由这里定**，适配器会把它写进指令并在评分时按它取产物；
+- `verifier_args`：评分脚本的参数模板，**可选**，不写则用 2.5 节的默认三参数。只有该题评分脚本的
+  参数名与默认不同、或不接受 `--groundtruth` 时才需要写（54 题里有 6 题属于这种）；
 - `skills_dir`：指向该仓库的技能目录；声明了就自动支持 `with-skill`，不声明则只能跑 `no-skill`；
 - `install`：能 `pip install -e` 的仓库用上面这条；不可安装的脚本型仓库改成
   `["{python} -m pip install -r {repo}/requirements.txt"]` 或留空；
@@ -377,9 +410,18 @@ python -m datasets.skillgen \
   **跑这题时不要把 0 分直接当成模型失败**；要改判分口径需另写评分脚本（不要改上游原件）。
 - **只有 1 个仓库**：已接入 `PDFPlumber` 的全部 3 题，但跨仓库的任务（`PyPDF2`、`Faker` 等）还没接，
   无法比较「不同仓库类型」的难度差异。
-- **单产物**：`multi_output: true` 的题需要改 `evaluate` 的产物约定。
-- **Windows 依赖**：需要 apt / GPU / Linux 系统库的题跑不了；要跑得换 Docker 环境（`benchflow`
-  在 Windows 上 import 失败，需 Linux 机器）。
+- **多产物**：上游 5 题 `multi_output: true`（`DeScratch_02/03`、`PyPDF2_02`、`SpeechBrain_01/02`）。
+  适配器支持「把整个产物目录取回」——`verifier_args` 只用 `{output_dir}` 时会自动切目录模式，
+  但指令里的产物约定仍是单个文件名，接入前要把 `expected_output` 写成该目录下的路径。
+- **评分脚本的依赖不会自动安装**：`setup` 只装 `install` 与 `python_packages`，`evaluate` 直接跑
+  `test_script.py`。上游 39/54 题的评分脚本 import numpy、PIL、cv2、torch 等，这些不会进容器，
+  接入前要么把它们加进 `python_packages`，要么在 `evaluate` 里另装。`PDFPlumber` 三题没暴露
+  这个问题，因为它们的评分脚本只用标准库加仓库本身。
+- **依赖自相矛盾的仓库跑不了**：`AnimeGANv3` 要 `tensorflow-GPU==1.15.0`（只支持到 Python 3.7，
+  而镜像与上游环境都是 3.10），`DeOldify` 同时要 `fastai==1.0.60`（只兼容 torch 1.x）与
+  `torch>=2.2.0`。这不是 GPU 不足，换镜像也解决不了。
+- **容器内网络是通的**：pip、apt、GitHub 在容器里均已实测可达（GitHub 还比宿主机稳），
+  所以「装依赖」「现场抓网页」这两类不再受宿主机 443 干扰影响。
 - **外网型任务**：`Trafilatura` 这类要现场抓网页的题，失败率主要来自网络而不是模型，结果要单独看。
 - **运行期覆盖**：`setup` 只在开跑前校验 import 落点，agent 中途自行 `pip install` 同名包不会被拦。
 - **版本控制**：`.gitignore` 忽略 `/data/*`，本包只有**这份 README 与 `skills/` 入库**（两处单独例外），
